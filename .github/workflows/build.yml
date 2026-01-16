@@ -49,13 +49,9 @@ jobs:
     # native=True уже указан в src/main.py
     # reload=False уже указан в src/main.py
     - name: Build with PyInstaller
+      shell: cmd
       run: |
-        pyinstaller --clean --noconfirm --onefile ^
-          --name "AI-Dubbing-Studio" ^
-          --add-binary "ffmpeg/ffmpeg.exe;." ^
-          --add-binary "ffmpeg/*.dll;." ^
-          --collect-all nicegui ^
-          src/main.py
+        pyinstaller --clean --noconfirm --onefile --name "AI-Dubbing-Studio" --add-binary "ffmpeg/ffmpeg.exe;." --add-binary "ffmpeg/*.dll;." --collect-all nicegui src/main.py
 
     # 6. Загружаем готовый EXE (без лишних папок)
     - name: Upload Artifact
