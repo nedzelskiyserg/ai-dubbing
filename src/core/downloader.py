@@ -42,9 +42,10 @@ def get_ffmpeg_path():
         # sys._MEIPASS - временная папка, куда PyInstaller распаковывает файлы
         if hasattr(sys, '_MEIPASS'):
             meipass = sys._MEIPASS
-            # FFmpeg должен быть в папке ffmpeg внутри _MEIPASS
-            possible_paths.insert(0, os.path.join(meipass, "ffmpeg", "ffmpeg.exe" if is_windows else "ffmpeg"))
+            # FFmpeg должен быть в корне _MEIPASS (так как добавлен с destination ".")
             possible_paths.insert(0, os.path.join(meipass, "ffmpeg.exe" if is_windows else "ffmpeg"))
+            # Также проверяем в подпапке ffmpeg на случай другого формата
+            possible_paths.insert(0, os.path.join(meipass, "ffmpeg", "ffmpeg.exe" if is_windows else "ffmpeg"))
         
         if is_windows:
             # На Windows exe находится в sys.executable
