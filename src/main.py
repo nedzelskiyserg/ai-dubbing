@@ -63,10 +63,47 @@ if getattr(sys, 'frozen', False):
     base_path = sys._MEIPASS
     # nicegui-pack упаковывает файлы в корень, не в src/
     src_path = base_path
+    
+    # КРИТИЧЕСКИ ВАЖНО: Исправляем sys.argv[0] для NiceGUI
+    # NiceGUI использует runpy.run_path(sys.argv[0]), но в exe sys.argv[0] указывает на exe файл
+    # Нужно указать путь к исходному Python файлу
+    original_argv0 = sys.argv[0]
+    
+    # Список возможных путей к main.py в exe
+    possible_paths = [
+        os.path.join(base_path, 'main.py'),
+        os.path.join(base_path, 'src', 'main.py'),
+        os.path.join(base_path, '__main__.py'),
+    ]
+    
+    # Ищем существующий файл main.py
+    main_py_path = None
+    for path in possible_paths:
+        if os.path.exists(path):
+            main_py_path = path
+            break
+    
+    if main_py_path:
+        sys.argv[0] = main_py_path
+        safe_print(f"Исправлен sys.argv[0]: {original_argv0} -> {sys.argv[0]}")
+    else:
+        # Если файл не найден, создаем временный файл или используем текущий
+        safe_print(f"ВНИМАНИЕ: main.py не найден в {base_path}")
+        safe_print(f"Содержимое {base_path}:")
+        try:
+            for item in os.listdir(base_path):
+                safe_print(f"  - {item}")
+        except Exception as e:
+            safe_print(f"Ошибка при чтении директории: {e}")
+        # Используем текущий файл как fallback
+        sys.argv[0] = os.path.join(base_path, '__main__.py')
 else:
     # Если запущено из исходников
     base_path = os.path.dirname(os.path.abspath(__file__))
     src_path = base_path
+    # Убеждаемся, что sys.argv[0] указывает на правильный файл
+    if not os.path.exists(sys.argv[0]) or not sys.argv[0].endswith('.py'):
+        sys.argv[0] = os.path.abspath(__file__)
 
 if src_path not in sys.path:
     sys.path.insert(0, src_path)
