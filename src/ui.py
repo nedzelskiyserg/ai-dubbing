@@ -16,39 +16,6 @@ def build_interface():
             ::-webkit-scrollbar { width: 10px; height: 10px; }
             ::-webkit-scrollbar-track { background: #1e1e1e; }
             ::-webkit-scrollbar-thumb { background: #424242; }
-            ::-webkit-scrollbar-thumb:hover { background: #555555; }
-            
-            /* Стили для textarea лога */
-            .log-textarea {
-                background-color: #1e1e1e !important;
-                color: #4EC9B0 !important;
-                border: none !important;
-                outline: none !important;
-                user-select: text !important;
-                -webkit-user-select: text !important;
-                -moz-user-select: text !important;
-                -ms-user-select: text !important;
-                font-family: 'Courier New', 'Consolas', 'Monaco', monospace !important;
-                resize: none !important;
-            }
-            
-            .log-textarea::placeholder {
-                color: #4EC9B0 !important;
-                opacity: 0.5 !important;
-            }
-            
-            /* Убираем стандартные стили Quasar для textarea */
-            .log-textarea .q-field__control {
-                background-color: #1e1e1e !important;
-                color: #4EC9B0 !important;
-            }
-            
-            .log-textarea textarea {
-                background-color: #1e1e1e !important;
-                color: #4EC9B0 !important;
-                border: none !important;
-                outline: none !important;
-            }
         </style>
     ''')
 
@@ -73,21 +40,13 @@ def build_interface():
     def smart_log(message):
         nonlocal log_view
         if log_view:
-            # Добавляем новое сообщение в textarea
-            current_text = log_view.value or ''
-            log_view.value = current_text + message + '\n'
-            # Прокручиваем вниз
-            ui.run_javascript(f'''
-                var el = getElement({log_view.id});
-                if(el) {{
-                    el.scrollTop = el.scrollHeight;
-                }}
-            ''')
+            log_view.push(message)
+            ui.run_javascript(f'var el = getElement({log_view.id}); if(el) el.scrollTop = el.scrollHeight;')
 
     def clear_log():
         nonlocal log_view
         if log_view:
-            log_view.value = ''
+            log_view.clear()
 
     async def start_processing():
         url = link_input.value
@@ -149,50 +108,19 @@ def build_interface():
 
         # === НИЖНЯЯ ЧАСТЬ (ПРОФЕССИОНАЛЬНЫЙ ТЕРМИНАЛ) ===
         with splitter.after:
-            # Контейнер терминала с flex-колонкой для правильного растягивания
-            with ui.element('div').classes('w-full h-full flex flex-col bg-[#1e1e1e] border-t border-black overflow-hidden'):
+            # ТЕХНОЛОГИЯ: absolute inset-0
+            # Это гарантирует, что терминал займет все место, которое ему выделил сплиттер.
+            with ui.element('div').classes('absolute inset-0 flex flex-col bg-[#1e1e1e] border-t border-black overflow-hidden'):
                 
                 # Шапка терминала
-                with ui.row().classes('w-full bg-[#252526] px-3 h-8 items-center justify-between shrink-0 border-b border-[#3e3e3e]'):
+                with ui.row().classes('w-full bg-[#252526] px-2 h-7 items-center justify-between shrink-0'):
                     with ui.row().classes('items-center gap-2'):
-                        ui.icon('terminal', size='16px', color='#4EC9B0')
-                        ui.label('TERMINAL OUTPUT').classes('text-[11px] text-gray-400 font-bold font-mono tracking-wider uppercase')
+                        ui.icon('terminal', size='14px', color='grey-5')
+                        ui.label('TERMINAL OUTPUT').classes('text-[10px] text-gray-400 font-bold font-mono tracking-wider')
                     
                     ui.button(icon='delete', on_click=clear_log) \
-                        .props('flat round dense size=sm color=grey') \
-                        .classes('text-gray-400 hover:text-white') \
-                        .tooltip('Очистить лог')
+                        .props('flat round dense size=xs color=grey') \
+                        .tooltip('Очистить')
 
-                # Контейнер для лога с правильным растягиванием
-                log_container = ui.element('div').classes('flex-1 min-h-0 w-full overflow-hidden relative')
-                
-                # Лог с возможностью выделения и копирования текста
-                # Используем textarea с правильными стилями для растягивания
-                log_view = ui.textarea() \
-                    .classes('log-textarea') \
-                    .props('readonly filled autogrow') \
-                    .style('''
-                        position: absolute !important;
-                        top: 0 !important;
-                        left: 0 !important;
-                        right: 0 !important;
-                        bottom: 0 !important;
-                        width: 100% !important;
-                        height: 100% !important;
-                        background-color: #1e1e1e !important;
-                        color: #4EC9B0 !important;
-                        border: none !important;
-                        outline: none !important;
-                        padding: 12px !important;
-                        font-size: 12px !important;
-                        line-height: 1.5 !important;
-                        font-family: 'Courier New', 'Consolas', 'Monaco', monospace !important;
-                        white-space: pre-wrap !important;
-                        word-wrap: break-word !important;
-                        overflow-y: auto !important;
-                        user-select: text !important;
-                        -webkit-user-select: text !important;
-                        -moz-user-select: text !important;
-                        -ms-user-select: text !important;
-                        resize: none !important;
-                    ''')
+                # Лог с фиксом min-h-0
+                log_view = ui.log().classes('flex-1 min-h-0 w-full bg-[#1e1e1e] text-[#4EC9B0] font-mono text-xs p-2 overflow-auto whitespace-pre-wrap leading-tight')
