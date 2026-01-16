@@ -24,15 +24,14 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    # 4. Сборка EXE
+    # 4. Сборка EXE с nicegui-pack
     # ВАЖНО:
-    # --onefile: один файл на выходе
-    # --noconsole: убирает черное окно
-    # --collect-all faster_whisper: ЖИЗНЕННО ВАЖНО. Заставляет PyInstaller собрать все скрытые файлы нейронки.
-    # --clean: очищает кэш сборки перед стартом
-    - name: Build with PyInstaller
+    # БЕЗ --windowed: консоль будет видна (для отладки)
+    # native=True уже указан в src/main.py
+    # reload=False уже указан в src/main.py
+    - name: Build with nicegui-pack
       run: |
-        pyinstaller --clean --noconfirm --onefile --noconsole --name "AI-Dubbing-Studio" --collect-all faster_whisper src/main.py
+        nicegui-pack src/main.py --name "AI-Dubbing-Studio"
 
     # 5. Загружаем готовый EXE (без лишних папок)
     - name: Upload Artifact
