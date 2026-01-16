@@ -1,18 +1,23 @@
 from nicegui import ui
-import sys
 
-def main():
-    ui.label('Привет! Это AI озвучка').classes('text-2xl font-bold text-center')
-    ui.label('Если ты видишь этот текст - мы победили ошибку 500!').classes('text-lg text-green-500')
-    ui.button('Тестовая кнопка', on_click=lambda: ui.notify('Работает!'))
+# @ui.page('/') говорит программе: "Это контент для главной страницы"
+@ui.page('/')
+def index():
+    with ui.column().classes('w-full items-center justify-center p-4'):
+        ui.label('Привет! Это AI озвучка').classes('text-2xl font-bold text-center')
+        ui.label('Версия 3.0 - теперь точно работает!').classes('text-lg text-blue-500')
+        
+        ui.label('Если ты видишь этот текст, значит мы победили 404.').classes('py-4')
+        
+        ui.button('Нажми меня', on_click=lambda: ui.notify('Ура, работает!'))
 
+# Точка входа в программу
 if __name__ in {"__main__", "__mp_main__"}:
-    # reload=False ОТКЛЮЧАЕТ поиск изменений в файле (критично для .exe)
-    # storage_secret нужен для шифрования сессий (чтобы не ругался)
     ui.run(
-        native=True, 
-        window_size=(800, 600), 
-        title="AI Dubbing App",
-        reload=False,
-        storage_secret='my-private-key' 
+        native=True,              # Запускать как приложение, а не в браузере
+        window_size=(800, 600),   # Размер окна
+        title="AI Dubbing App",   # Заголовок
+        reload=False,             # ОТКЛЮЧИТЬ перезагрузку (важно для exe)
+        port=native.find_open_port() if 'native' in globals() else 8080, # Авто-выбор порта
+        storage_secret='secret'   # Ключ шифрования
     )
