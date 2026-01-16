@@ -6,6 +6,8 @@ import subprocess
 import time
 import ssl
 import certifi
+import sys
+import platform
 # Импортируем наши пути
 from core.config import APP_PATHS
 
@@ -30,19 +32,80 @@ fix_ssl()
 
 def get_ffmpeg_path():
     """Ищет FFmpeg в системе (и внутри .app/.exe при сборке)"""
-    possible_paths = [
-        # Стандартные пути
-        "/opt/homebrew/bin/ffmpeg",
-        "/usr/local/bin/ffmpeg",
-        "/usr/bin/ffmpeg",
-        "ffmpeg",
-        # Путь, если ffmpeg лежит рядом с exe (для портативной версии)
-        os.path.join(os.getcwd(), "ffmpeg"),
-        os.path.join(os.getcwd(), "ffmpeg.exe")
-    ]
+    is_windows = platform.system() == 'Windows'
+    is_frozen = getattr(sys, 'frozen', False)
+    
+    possible_paths = []
+    
+    # Если запущено из exe файла
+    if is_frozen:
+        if is_windows:
+            # На Windows exe находится в sys.executable
+            exe_dir = os.path.dirname(sys.executable)
+        else:
+            # На macOS/Linux используем sys._MEIPASS или директорию exe
+            exe_dir = os.path.dirname(sys.executable) if hasattr(sys, 'executable') else os.getcwd()
+        
+        # Ищем рядом с exe файлом
+        possible_paths.extend([
+            os.path.join(exe_dir, "ffmpeg.exe" if is_windows else "ffmpeg"),
+            os.path.join(exe_dir, "ffmpeg", "ffmpeg.exe" if is_windows else "ffmpeg"),
+        ])
+    
+    # Текущая рабочая директория
+    cwd = os.getcwd()
+    possible_paths.extend([
+        os.path.join(cwd, "ffmpeg.exe" if is_windows else "ffmpeg"),
+        os.path.join(cwd, "ffmpeg", "ffmpeg.exe" if is_windows else "ffmpeg"),
+    ])
+    
+    # Windows стандартные пути
+    if is_windows:
+        program_files = os.environ.get('ProgramFiles', 'C:\\Program Files')
+        program_files_x86 = os.environ.get('ProgramFiles(x86)', 'C:\\Program Files (x86)')
+        local_appdata = os.environ.get('LOCALAPPDATA', os.path.expanduser('~\\AppData\\Local'))
+        
+        possible_paths.extend([
+            os.path.join(program_files, "ffmpeg", "bin", "ffmpeg.exe"),
+            os.path.join(program_files_x86, "ffmpeg", "bin", "ffmpeg.exe"),
+            os.path.join(local_appdata, "ffmpeg", "bin", "ffmpeg.exe"),
+            "ffmpeg.exe",  # В PATH
+            "ffmpeg",  # В PATH (на случай если установлен без .exe)
+        ])
+    else:
+        # Unix/Linux/macOS стандартные пути
+        possible_paths.extend([
+            "/opt/homebrew/bin/ffmpeg",
+            "/usr/local/bin/ffmpeg",
+            "/usr/bin/ffmpeg",
+            "ffmpeg",  # В PATH
+        ])
+    
+    # Проверяем каждый путь
     for path in possible_paths:
-        if shutil.which(path) or (os.path.exists(path) and os.access(path, os.X_OK)):
+        # Сначала проверяем через shutil.which (ищет в PATH)
+        if shutil.which(path):
             return path
+        
+        # Затем проверяем существование файла
+        if os.path.exists(path):
+            # На Windows проверяем доступность по-другому
+            if is_windows:
+                try:
+                    # Пробуем запустить для проверки доступности
+                    result = subprocess.run([path, '-version'], 
+                                          stdout=subprocess.PIPE, 
+                                          stderr=subprocess.PIPE, 
+                                          timeout=2)
+                    if result.returncode == 0 or result.returncode == 1:  # FFmpeg возвращает 1 при -version
+                        return path
+                except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+                    continue
+            else:
+                # На Unix-подобных системах проверяем права на выполнение
+                if os.access(path, os.X_OK):
+                    return path
+    
     return None
 
 def download_video(url, log_func, target_quality='1080p'):
