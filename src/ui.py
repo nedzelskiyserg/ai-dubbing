@@ -18,7 +18,20 @@ def build_interface():
             ::-webkit-scrollbar-thumb { background: #424242; }
             
             /* Возможность выделения текста в логе */
-            .q-log {
+            .q-log,
+            .q-log *,
+            [class*="log"],
+            [id*="log"] {
+                user-select: text !important;
+                -webkit-user-select: text !important;
+                -moz-user-select: text !important;
+                -ms-user-select: text !important;
+            }
+            
+            /* Применяем к любому элементу с классом содержащим log */
+            div[class*="log"],
+            pre[class*="log"],
+            code[class*="log"] {
                 user-select: text !important;
                 -webkit-user-select: text !important;
                 -moz-user-select: text !important;
@@ -130,5 +143,6 @@ def build_interface():
                         .props('flat round dense size=xs color=grey') \
                         .tooltip('Очистить')
 
-                # Лог с фиксом min-h-0
-                log_view = ui.log().classes('flex-1 min-h-0 w-full bg-[#1e1e1e] text-[#4EC9B0] font-mono text-xs p-2 overflow-auto whitespace-pre-wrap leading-tight')
+                # Лог с фиксом min-h-0 и возможностью выделения текста
+                log_view = ui.log().classes('flex-1 min-h-0 w-full bg-[#1e1e1e] text-[#4EC9B0] font-mono text-xs p-2 overflow-auto whitespace-pre-wrap leading-tight') \
+                    .style('user-select: text; -webkit-user-select: text; -moz-user-select: text; -ms-user-select: text;')
