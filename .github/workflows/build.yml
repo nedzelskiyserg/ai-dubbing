@@ -40,16 +40,22 @@ jobs:
           Copy-Item $dll.FullName -Destination ffmpeg\
         }
 
-    # 5. Сборка EXE с nicegui-pack
+    # 5. Сборка EXE с PyInstaller (вместо nicegui-pack для поддержки --add-binary)
     # ВАЖНО:
     # --onefile: создает один исполняемый файл .exe
     # --add-binary: добавляет FFmpeg в сборку (формат: "source;destination")
-    # БЕЗ --windowed: консоль будет видна (для отладки)
+    # --collect-all nicegui: собирает все зависимости NiceGUI
+    # БЕЗ --noconsole: консоль будет видна (для отладки)
     # native=True уже указан в src/main.py
     # reload=False уже указан в src/main.py
-    - name: Build with nicegui-pack
+    - name: Build with PyInstaller
       run: |
-        nicegui-pack src/main.py --name "AI-Dubbing-Studio" --onefile --add-binary "ffmpeg/ffmpeg.exe;." --add-binary "ffmpeg/*.dll;."
+        pyinstaller --clean --noconfirm --onefile ^
+          --name "AI-Dubbing-Studio" ^
+          --add-binary "ffmpeg/ffmpeg.exe;." ^
+          --add-binary "ffmpeg/*.dll;." ^
+          --collect-all nicegui ^
+          src/main.py
 
     # 6. Загружаем готовый EXE (без лишних папок)
     - name: Upload Artifact
