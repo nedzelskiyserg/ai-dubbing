@@ -16,6 +16,14 @@ def build_interface():
             ::-webkit-scrollbar { width: 10px; height: 10px; }
             ::-webkit-scrollbar-track { background: #1e1e1e; }
             ::-webkit-scrollbar-thumb { background: #424242; }
+            
+            /* Возможность выделения текста в логе */
+            .q-log {
+                user-select: text !important;
+                -webkit-user-select: text !important;
+                -moz-user-select: text !important;
+                -ms-user-select: text !important;
+            }
         </style>
     ''')
 
