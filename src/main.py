@@ -84,10 +84,22 @@ if getattr(sys, 'frozen', False):
             break
     
     if main_py_path:
+        # Проверяем, что файл не содержит null байтов
+        try:
+            with open(main_py_path, 'rb') as f:
+                content = f.read()
+                if b'\x00' in content:
+                    safe_print(f"ВНИМАНИЕ: файл {main_py_path} содержит null байты, очищаем...")
+                    content = content.replace(b'\x00', b'')
+                    with open(main_py_path, 'wb') as fw:
+                        fw.write(content)
+        except Exception as e:
+            safe_print(f"Ошибка при проверке файла {main_py_path}: {e}")
+        
         sys.argv[0] = main_py_path
         safe_print(f"Исправлен sys.argv[0]: {original_argv0} -> {sys.argv[0]}")
     else:
-        # Если файл не найден, создаем временный файл или используем текущий
+        # Если файл не найден, создаем временный файл с минимальным кодом
         safe_print(f"ВНИМАНИЕ: main.py не найден в {base_path}")
         safe_print(f"Содержимое {base_path}:")
         try:
@@ -95,8 +107,34 @@ if getattr(sys, 'frozen', False):
                 safe_print(f"  - {item}")
         except Exception as e:
             safe_print(f"Ошибка при чтении директории: {e}")
-        # Используем текущий файл как fallback
-        sys.argv[0] = os.path.join(base_path, '__main__.py')
+        
+        # Создаем временный файл main.py для NiceGUI
+        temp_main_py = os.path.join(base_path, 'main.py')
+        try:
+            # Создаем минимальный файл, который просто импортирует и запускает UI
+            temp_content = '''# Temporary main.py for NiceGUI
+import sys
+import os
+
+# Add current directory to path
+if hasattr(sys, "_MEIPASS"):
+    sys.path.insert(0, sys._MEIPASS)
+
+from nicegui import ui
+from ui import build_interface
+
+if __name__ == "__main__":
+    build_interface()
+    ui.run(title="AI Dubbing Studio", native=True, reload=False, window_size=(900, 700))
+'''
+            with open(temp_main_py, 'w', encoding='utf-8') as f:
+                f.write(temp_content)
+            sys.argv[0] = temp_main_py
+            safe_print(f"Создан временный файл: {temp_main_py}")
+        except Exception as e:
+            safe_print(f"Ошибка при создании временного файла: {e}")
+            # Используем текущий файл как fallback
+            sys.argv[0] = os.path.join(base_path, '__main__.py')
 else:
     # Если запущено из исходников
     base_path = os.path.dirname(os.path.abspath(__file__))
@@ -111,10 +149,51 @@ if src_path not in sys.path:
 try:
     from nicegui import ui
     from ui import build_interface
+    import runpy
 except ImportError as e:
     safe_print(f"Ошибка импорта: {e}")
     safe_print(f"sys.path: {sys.path}")
     raise
+
+# КРИТИЧЕСКИ ВАЖНО: Перехватываем runpy.run_path для исправления пути
+# NiceGUI вызывает runpy.run_path() внутри себя, и нам нужно убедиться,
+# что он использует правильный файл, а не exe
+if getattr(sys, 'frozen', False):
+    original_run_path = runpy.run_path
+    
+    def patched_run_path(file_path, *args, **kwargs):
+        """Патч для runpy.run_path, который исправляет путь к файлу"""
+        # Если передан exe файл или путь с null байтами, используем правильный путь
+        if file_path and (not file_path.endswith('.py') or not os.path.exists(file_path)):
+            # Ищем правильный файл main.py
+            base_path = sys._MEIPASS
+            possible_paths = [
+                os.path.join(base_path, 'main.py'),
+                os.path.join(base_path, 'src', 'main.py'),
+                os.path.join(base_path, '__main__.py'),
+            ]
+            for path in possible_paths:
+                if os.path.exists(path):
+                    # Проверяем на null байты
+                    try:
+                        with open(path, 'rb') as f:
+                            content = f.read()
+                            if b'\x00' in content:
+                                safe_print(f"ВНИМАНИЕ: файл {path} содержит null байты, очищаем...")
+                                content = content.replace(b'\x00', b'')
+                                with open(path, 'wb') as fw:
+                                    fw.write(content)
+                    except Exception:
+                        pass
+                    file_path = path
+                    break
+        
+        # Вызываем оригинальную функцию с исправленным путем
+        return original_run_path(file_path, *args, **kwargs)
+    
+    # Применяем патч
+    runpy.run_path = patched_run_path
+    safe_print("Применен патч для runpy.run_path")
 
 # Главная точка входа
 if __name__ in {"__main__", "__mp_main__"}:
