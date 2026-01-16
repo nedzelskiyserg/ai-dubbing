@@ -1,3 +1,4 @@
 nicegui
 pywebview
 pyinstaller
+yt-dlp
