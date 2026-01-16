@@ -26,10 +26,11 @@ jobs:
 
     # 4. Скачиваем FFmpeg для Windows
     - name: Download FFmpeg
+      shell: pwsh
       run: |
-        mkdir ffmpeg
-        curl -L -o ffmpeg.zip https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip
-        powershell -Command "Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg_temp -Force"
+        New-Item -ItemType Directory -Force -Path ffmpeg
+        Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile "ffmpeg.zip"
+        Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg_temp -Force
         # Копируем ffmpeg.exe из распакованной папки
         $ffmpegPath = Get-ChildItem -Path ffmpeg_temp -Recurse -Filter ffmpeg.exe | Select-Object -First 1
         Copy-Item $ffmpegPath.FullName -Destination ffmpeg\ffmpeg.exe
@@ -42,13 +43,13 @@ jobs:
     # 5. Сборка EXE с nicegui-pack
     # ВАЖНО:
     # --onefile: создает один исполняемый файл .exe
-    # --add-binary: добавляет FFmpeg в сборку
+    # --add-binary: добавляет FFmpeg в сборку (формат: "source;destination")
     # БЕЗ --windowed: консоль будет видна (для отладки)
     # native=True уже указан в src/main.py
     # reload=False уже указан в src/main.py
     - name: Build with nicegui-pack
       run: |
-        nicegui-pack src/main.py --name "AI-Dubbing-Studio" --onefile --add-binary "ffmpeg/ffmpeg.exe;ffmpeg" --add-binary "ffmpeg/*.dll;ffmpeg"
+        nicegui-pack src/main.py --name "AI-Dubbing-Studio" --onefile --add-binary "ffmpeg/ffmpeg.exe;." --add-binary "ffmpeg/*.dll;."
 
     # 6. Загружаем готовый EXE (без лишних папок)
     - name: Upload Artifact
