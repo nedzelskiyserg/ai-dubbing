@@ -1,34 +1,45 @@
-name: Build Windows EXE
+name: Build EXE
 
 on:
   push:
     branches: [ "main" ]
-  workflow_dispatch:
 
 jobs:
   build:
     runs-on: windows-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
 
-    - name: Install Libraries
+    - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Build EXE
+    # --- МАГИЯ ЗДЕСЬ: Создаем .env файл из Секрета ---
+    - name: Create .env file
+      shell: bash
+      env:
+        PEXELS_KEY: ${{ secrets.PEXELS_API_KEY }}
       run: |
-        # Собираем exe файл
-        pyinstaller --name "MyDubbingApp" --onefile --noconsole src/main.py
+        echo "PEXELS_API_KEY=$PEXELS_KEY" > .env
 
-    - name: Upload Result
+    # Собираем EXE (добавляем --add-data, чтобы .env попал внутрь, если нужно, 
+    # или просто оставляем его рядом. Самый надежный способ - положить рядом).
+    - name: Build with PyInstaller
+      run: |
+        pyinstaller --noconfirm --onefile --windowed --name "AI-Dubbing" --icon=NONE src/main.py
+
+    # --- ВАЖНО: Кладем в архив и EXE, и файл .env ---
+    - name: Upload Build Artifact
       uses: actions/upload-artifact@v4
       with:
         name: Windows-App-Build
-        path: dist/MyDubbingApp.exe
+        path: |
+          dist/AI-Dubbing.exe
+          .env

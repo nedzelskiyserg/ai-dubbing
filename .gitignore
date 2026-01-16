@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.env
+
+# Загрузки и временные файлы (ВАЖНО!)
+downloads/
+output/
+tests/downloads/
+*.mp4
+*.mp3
+*.wav
+*.json
+!requirements.txt
+!src/**/*.json
+
+# Системные файлы
+.DS_Store
