@@ -38,11 +38,13 @@ def build_interface():
 
     # --- ЛОГИКА ---
     def smart_log(message):
+        nonlocal log_view
         if log_view:
             log_view.push(message)
             ui.run_javascript(f'var el = getElement({log_view.id}); if(el) el.scrollTop = el.scrollHeight;')
 
     def clear_log():
+        nonlocal log_view
         if log_view:
             log_view.clear()
 

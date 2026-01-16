@@ -57,8 +57,27 @@ def safe_print(*args, **kwargs):
         print(*safe_args, **kwargs)
 # ------------------------------------
 
-from nicegui import ui
-from ui import build_interface
+# Добавляем путь к src в sys.path для правильной работы импортов
+if getattr(sys, 'frozen', False):
+    # Если запущено из exe файла
+    base_path = sys._MEIPASS
+    # nicegui-pack упаковывает файлы в корень, не в src/
+    src_path = base_path
+else:
+    # Если запущено из исходников
+    base_path = os.path.dirname(os.path.abspath(__file__))
+    src_path = base_path
+
+if src_path not in sys.path:
+    sys.path.insert(0, src_path)
+
+try:
+    from nicegui import ui
+    from ui import build_interface
+except ImportError as e:
+    safe_print(f"Ошибка импорта: {e}")
+    safe_print(f"sys.path: {sys.path}")
+    raise
 
 # Главная точка входа
 if __name__ in {"__main__", "__mp_main__"}:
