@@ -1,4 +1,4 @@
-name: Build EXE
+name: Build AI Dubbing Studio
 
 on:
   push:
@@ -9,37 +9,34 @@ jobs:
     runs-on: windows-latest
 
     steps:
+    # 1. Скачиваем код репозитория
     - uses: actions/checkout@v4
 
+    # 2. Ставим Python 3.10 (самый стабильный для ML задач)
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
 
+    # 3. Устанавливаем библиотеки из requirements.txt
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    # --- МАГИЯ ЗДЕСЬ: Создаем .env файл из Секрета ---
-    - name: Create .env file
-      shell: bash
-      env:
-        PEXELS_KEY: ${{ secrets.PEXELS_API_KEY }}
-      run: |
-        echo "PEXELS_API_KEY=$PEXELS_KEY" > .env
-
-    # Собираем EXE (добавляем --add-data, чтобы .env попал внутрь, если нужно, 
-    # или просто оставляем его рядом. Самый надежный способ - положить рядом).
+    # 4. Сборка EXE
+    # ВАЖНО:
+    # --onefile: один файл на выходе
+    # --noconsole: убирает черное окно
+    # --collect-all faster_whisper: ЖИЗНЕННО ВАЖНО. Заставляет PyInstaller собрать все скрытые файлы нейронки.
+    # --clean: очищает кэш сборки перед стартом
     - name: Build with PyInstaller
       run: |
-        pyinstaller --noconfirm --onefile --windowed --name "AI-Dubbing" --icon=NONE src/main.py
+        pyinstaller --clean --noconfirm --onefile --noconsole --name "AI-Dubbing-Studio" --collect-all faster_whisper src/main.py
 
-    # --- ВАЖНО: Кладем в архив и EXE, и файл .env ---
-    - name: Upload Build Artifact
+    # 5. Загружаем готовый EXE (без лишних папок)
+    - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: Windows-App-Build
-        path: |
-          dist/AI-Dubbing.exe
-          .env
+        name: AI-Dubbing-Studio
+        path: dist/AI-Dubbing-Studio.exe
