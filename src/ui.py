@@ -146,3 +146,24 @@ def build_interface():
                 # Лог с фиксом min-h-0 и возможностью выделения текста
                 log_view = ui.log().classes('flex-1 min-h-0 w-full bg-[#1e1e1e] text-[#4EC9B0] font-mono text-xs p-2 overflow-auto whitespace-pre-wrap leading-tight') \
                     .style('user-select: text; -webkit-user-select: text; -moz-user-select: text; -ms-user-select: text;')
+                
+                # Применяем стили выделения через JavaScript ко всем дочерним элементам
+                ui.run_javascript(f'''
+                    setTimeout(function() {{
+                        var logEl = getElement({log_view.id});
+                        if (logEl) {{
+                            logEl.style.userSelect = 'text';
+                            logEl.style.webkitUserSelect = 'text';
+                            logEl.style.mozUserSelect = 'text';
+                            logEl.style.msUserSelect = 'text';
+                            // Применяем ко всем дочерним элементам
+                            var children = logEl.querySelectorAll('*');
+                            for (var i = 0; i < children.length; i++) {{
+                                children[i].style.userSelect = 'text';
+                                children[i].style.webkitUserSelect = 'text';
+                                children[i].style.mozUserSelect = 'text';
+                                children[i].style.msUserSelect = 'text';
+                            }}
+                        }}
+                    }}, 100);
+                ''')
