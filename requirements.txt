@@ -3,3 +3,4 @@ pywebview
 pyinstaller
 pytubefix
 faster-whisper
+certifi

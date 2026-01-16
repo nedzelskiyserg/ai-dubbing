@@ -40,13 +40,21 @@ def build_interface():
     def smart_log(message):
         nonlocal log_view
         if log_view:
-            log_view.push(message)
-            ui.run_javascript(f'var el = getElement({log_view.id}); if(el) el.scrollTop = el.scrollHeight;')
+            # Добавляем новое сообщение в textarea
+            current_text = log_view.value or ''
+            log_view.value = current_text + message + '\n'
+            # Прокручиваем вниз
+            ui.run_javascript(f'''
+                var el = getElement({log_view.id});
+                if(el) {{
+                    el.scrollTop = el.scrollHeight;
+                }}
+            ''')
 
     def clear_log():
         nonlocal log_view
         if log_view:
-            log_view.clear()
+            log_view.value = ''
 
     async def start_processing():
         url = link_input.value
@@ -122,5 +130,8 @@ def build_interface():
                         .props('flat round dense size=xs color=grey') \
                         .tooltip('Очистить')
 
-                # Лог с фиксом min-h-0
-                log_view = ui.log().classes('flex-1 min-h-0 w-full bg-[#1e1e1e] text-[#4EC9B0] font-mono text-xs p-2 overflow-auto whitespace-pre-wrap leading-tight')
+                # Лог с возможностью выделения и копирования текста
+                # Используем textarea вместо log для возможности выделения
+                log_view = ui.textarea().classes('flex-1 min-h-0 w-full bg-[#1e1e1e] text-[#4EC9B0] font-mono text-xs p-2 overflow-auto whitespace-pre-wrap leading-tight') \
+                    .props('readonly outlined') \
+                    .style('border: none; color: #4EC9B0; user-select: text; -webkit-user-select: text; -moz-user-select: text; -ms-user-select: text;')

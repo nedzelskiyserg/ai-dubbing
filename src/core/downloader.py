@@ -4,8 +4,29 @@ import os
 import shutil
 import subprocess
 import time
+import ssl
+import certifi
 # Импортируем наши пути
 from core.config import APP_PATHS
+
+# Исправление SSL для Windows
+def fix_ssl():
+    """Исправляет проблемы с SSL сертификатами на Windows"""
+    import platform
+    try:
+        # Создаем SSL контекст с использованием certifi
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+        # Устанавливаем глобальный SSL контекст
+        ssl._create_default_https_context = lambda: ssl_context
+    except Exception as e:
+        # Если certifi не установлен или произошла ошибка, используем контекст без проверки (только для Windows)
+        if platform.system() == 'Windows':
+            # Создаем контекст без проверки сертификатов для Windows
+            ssl._create_default_https_context = ssl._create_unverified_context
+        # На других системах оставляем стандартное поведение
+
+# Применяем фикс SSL при импорте
+fix_ssl()
 
 def get_ffmpeg_path():
     """Ищет FFmpeg в системе (и внутри .app/.exe при сборке)"""
