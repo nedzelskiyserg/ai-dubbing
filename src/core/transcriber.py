@@ -70,18 +70,68 @@ class Transcriber:
         # faster-whisper автоматически скачает модель в кэш, если указать download_root
         download_root = str(self.models_path)
         
+        # Определяем compute_type в зависимости от устройства
+        # Для CPU используем int8, для GPU пробуем float16, если не поддерживается - int8_float16
+        compute_type = "int8"  # Безопасное значение по умолчанию для CPU
+        
+        if self.device == "auto":
+            # Пытаемся определить устройство автоматически
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    self.device = "cuda"
+                    compute_type = "float16"  # Для CUDA пробуем float16
+                else:
+                    self.device = "cpu"
+                    compute_type = "int8"
+            except ImportError:
+                # Если torch не установлен, используем CPU
+                self.device = "cpu"
+                compute_type = "int8"
+        elif self.device == "cuda":
+            compute_type = "float16"
+        else:
+            compute_type = "int8"
+        
         try:
-            # Загружаем модель с указанием пути для скачивания
+            # Пробуем загрузить с оптимальным compute_type
             self.model = WhisperModel(
                 self.model_size,
                 device=self.device,
                 download_root=download_root,
-                compute_type="int8" if self.device == "cpu" else "float16"
+                compute_type=compute_type
             )
-            self._log(f"✅ Модель загружена: {self.model_size}")
+            self._log(f"✅ Модель загружена: {self.model_size} (устройство: {self.device}, тип: {compute_type})")
         except Exception as e:
-            self._log(f"❌ Ошибка загрузки модели: {str(e)}")
-            raise
+            # Если float16 не поддерживается, пробуем int8_float16 или int8
+            if "float16" in str(e).lower():
+                self._log(f"⚠️ Float16 не поддерживается, пробуем int8...")
+                try:
+                    compute_type = "int8_float16" if self.device != "cpu" else "int8"
+                    self.model = WhisperModel(
+                        self.model_size,
+                        device=self.device,
+                        download_root=download_root,
+                        compute_type=compute_type
+                    )
+                    self._log(f"✅ Модель загружена: {self.model_size} (устройство: {self.device}, тип: {compute_type})")
+                except Exception as e2:
+                    # Последняя попытка - только int8
+                    if compute_type != "int8":
+                        self._log(f"⚠️ Пробуем int8...")
+                        self.model = WhisperModel(
+                            self.model_size,
+                            device="cpu",  # Принудительно CPU с int8
+                            download_root=download_root,
+                            compute_type="int8"
+                        )
+                        self._log(f"✅ Модель загружена: {self.model_size} (устройство: cpu, тип: int8)")
+                    else:
+                        self._log(f"❌ Ошибка загрузки модели: {str(e2)}")
+                        raise
+            else:
+                self._log(f"❌ Ошибка загрузки модели: {str(e)}")
+                raise
     
     def transcribe(
         self,
