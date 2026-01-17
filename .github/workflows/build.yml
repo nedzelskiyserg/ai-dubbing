@@ -18,13 +18,26 @@ jobs:
       with:
         python-version: '3.10'
 
-    # 3. Устанавливаем библиотеки из requirements.txt
+    # 3. Создаем .env файл из секрета (для Hugging Face токена)
+    - name: Create .env file from secret
+      shell: pwsh
+      run: |
+        if ($env:HF_TOKEN) {
+          "HF_TOKEN=$env:HF_TOKEN" | Out-File -FilePath .env -Encoding utf8
+          Write-Host "✅ .env файл создан из секрета"
+        } else {
+          Write-Host "⚠️ HF_TOKEN секрет не установлен, диаризация может не работать"
+        }
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+    # 4. Устанавливаем библиотеки из requirements.txt
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    # 4. Скачиваем FFmpeg для Windows
+    # 5. Скачиваем FFmpeg для Windows
     - name: Download FFmpeg
       shell: pwsh
       run: |
@@ -40,7 +53,7 @@ jobs:
           Copy-Item $dll.FullName -Destination ffmpeg\
         }
 
-    # 5. Сборка EXE с PyInstaller (вместо nicegui-pack для поддержки --add-binary)
+    # 6. Сборка EXE с PyInstaller (вместо nicegui-pack для поддержки --add-binary)
     # ВАЖНО:
     # --onefile: создает один исполняемый файл .exe
     # --add-binary: добавляет FFmpeg в сборку (формат: "source;destination")
@@ -66,7 +79,7 @@ jobs:
         # Выполняем команду
         Invoke-Expression $cmd
 
-    # 6. Загружаем готовый EXE (без лишних папок)
+    # 7. Загружаем готовый EXE (без лишних папок)
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:

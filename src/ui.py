@@ -121,7 +121,15 @@ def build_interface():
         model_size = model_size_select.value if model_size_select else 'base'
         language = language_select.value if language_select else None
         enable_diarization = diarize_checkbox.value if diarize_checkbox else False
-        hf_token = hf_token_input.value.strip() if hf_token_input and hf_token_input.value else None
+        
+        # Получаем токен: сначала из переменных окружения, потом из поля ввода
+        hf_token = os.getenv('HF_TOKEN', '').strip()
+        if not hf_token and hf_token_input and hf_token_input.value:
+            hf_token = hf_token_input.value.strip()
+        
+        if enable_diarization and not hf_token:
+            smart_log("⚠️ ВНИМАНИЕ: Hugging Face токен не найден!")
+            smart_log("💡 Установите токен в .env файл или введите в поле выше")
         
         smart_log(f"\n🎤 ЗАПУСК ТРАНСКРИПЦИИ")
         smart_log("─" * 40)
@@ -290,11 +298,13 @@ def build_interface():
                             .classes('mt-2')
                         
                         # Поле для Hugging Face token (опционально, для диаризации)
-                        hf_token_input = ui.input(
-                            label='Hugging Face Token (для диаризации)',
-                            placeholder='hf_... (опционально)',
-                            password=True
-                        ).classes('w-full mt-2').props('clearable')
+                        with ui.column().classes('w-full mt-2'):
+                            hf_token_input = ui.input(
+                                label='Hugging Face Token (для диаризации)',
+                                placeholder='hf_... (опционально, можно установить в .env)',
+                                password=True
+                            ).classes('w-full').props('clearable')
+                            ui.label('💡 Токен можно установить в .env файл (HF_TOKEN=...)').classes('text-xs text-gray-400 mt-1')
                         
                         ui.button('СКАЧАТЬ ВИДЕО', on_click=start_processing) \
                             .classes('w-full mt-8 h-12 text-lg font-bold text-white shadow-lg') \

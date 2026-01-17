@@ -1,6 +1,7 @@
 import sys
 import os
 import io
+from pathlib import Path
 
 # --- FIX WINDOWS CONSOLE ENCODING ---
 # Устанавливаем UTF-8 кодировку ДО любых операций с stdout/stderr
@@ -40,6 +41,28 @@ def fix_encoding():
 
 # Применяем фикс сразу
 fix_encoding()
+
+# Загружаем переменные окружения из .env файла (ДО определения safe_print)
+try:
+    from dotenv import load_dotenv
+    # Ищем .env файл рядом с проектом
+    if getattr(sys, 'frozen', False):
+        # В exe ищем .env рядом с exe файлом
+        env_path = Path(sys.executable).parent / '.env'
+    else:
+        # В исходниках ищем в корне проекта
+        env_path = Path(__file__).parent.parent / '.env'
+        if not env_path.exists():
+            env_path = Path(__file__).parent.parent.parent / '.env'
+    
+    if env_path.exists():
+        load_dotenv(env_path)
+except ImportError:
+    # python-dotenv не установлен, пропускаем
+    pass
+except Exception:
+    # Игнорируем ошибки загрузки .env
+    pass
 
 # Безопасная функция print для вывода с UTF-8
 def safe_print(*args, **kwargs):

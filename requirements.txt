@@ -7,3 +7,4 @@ certifi
 pyannote.audio>=3.1.0
 torch
 torchaudio
+python-dotenv
