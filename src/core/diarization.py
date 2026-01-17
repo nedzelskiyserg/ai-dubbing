@@ -9,16 +9,34 @@ from pathlib import Path
 from typing import Optional, Callable, List, Dict, Tuple
 import platform
 
+# Детальное логирование для диагностики
+import sys
+import os
+
+# Логируем информацию о Python окружении
+def _log_import_info():
+    """Логирует информацию о Python окружении для диагностики"""
+    info = {
+        'python_executable': sys.executable,
+        'python_version': sys.version,
+        'sys.path': sys.path[:5],  # Первые 5 путей
+        'frozen': getattr(sys, 'frozen', False),
+    }
+    return info
+
 try:
     from pyannote.audio import Pipeline
     from pyannote.core import Annotation, Segment
     PYANNOTE_AVAILABLE = True
+    IMPORT_ERROR = None
 except ImportError as e:
     PYANNOTE_AVAILABLE = False
     Pipeline = None
     Annotation = None
     Segment = None
     IMPORT_ERROR = str(e)
+    # Сохраняем информацию об окружении при ошибке
+    IMPORT_ENV_INFO = _log_import_info()
 
 # Импортируем пути из config
 from core.config import APP_PATHS

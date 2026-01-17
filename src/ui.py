@@ -165,10 +165,30 @@ def build_interface():
                 
                 # Проверяем доступность pyannote.audio перед запуском
                 try:
-                    from core.diarization import PYANNOTE_AVAILABLE
+                    import sys
+                    import os
+                    smart_log(f"🔍 Диагностика Python окружения:")
+                    smart_log(f"   Python: {sys.executable}")
+                    smart_log(f"   Версия: {sys.version.split()[0]}")
+                    smart_log(f"   Frozen: {getattr(sys, 'frozen', False)}")
+                    
+                    # Пробуем прямой импорт pyannote.audio
+                    try:
+                        import pyannote.audio
+                        smart_log(f"✅ Прямой импорт pyannote.audio: УСПЕХ")
+                        smart_log(f"   Расположение: {pyannote.audio.__file__}")
+                    except ImportError as direct_import_error:
+                        smart_log(f"❌ Прямой импорт pyannote.audio: ОШИБКА")
+                        smart_log(f"   Ошибка: {str(direct_import_error)}")
+                    
+                    # Проверяем через наш модуль
+                    from core.diarization import PYANNOTE_AVAILABLE, IMPORT_ERROR
                     if not PYANNOTE_AVAILABLE:
                         smart_log("⚠️ pyannote.audio не установлен в текущем окружении Python")
+                        if IMPORT_ERROR:
+                            smart_log(f"   Детали ошибки: {IMPORT_ERROR}")
                         smart_log("💡 Установите: python3 -m pip install pyannote.audio")
+                        smart_log(f"   Или: {sys.executable} -m pip install pyannote.audio")
                         smart_log("📝 Продолжаем без диаризации...")
                         result['diarization'] = None
                     else:
