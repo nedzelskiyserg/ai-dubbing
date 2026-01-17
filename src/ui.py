@@ -4,6 +4,7 @@ from core.transcriber import Transcriber
 from core.config import APP_PATHS, open_folder 
 import asyncio
 import os
+import json
 
 def build_interface():
     # --- 1. CSS ФИКСЫ (ОСТАВЛЯЕМ ДЛЯ СТАБИЛЬНОСТИ) ---
