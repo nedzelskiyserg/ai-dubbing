@@ -49,9 +49,22 @@ jobs:
     # native=True уже указан в src/main.py
     # reload=False уже указан в src/main.py
     - name: Build with PyInstaller
-      shell: cmd
+      shell: pwsh
       run: |
-        pyinstaller --clean --noconfirm --onefile --name "AI-Dubbing-Studio" --add-binary "ffmpeg/ffmpeg.exe;." --add-binary "ffmpeg/*.dll;." --collect-all nicegui src/main.py
+        # Создаем базовую команду
+        $cmd = "pyinstaller --clean --noconfirm --onefile --name `"AI-Dubbing-Studio`" --add-binary `"ffmpeg/ffmpeg.exe;.`""
+        
+        # Добавляем каждый DLL файл отдельно
+        $dllFiles = Get-ChildItem -Path ffmpeg -Filter *.dll
+        foreach ($dll in $dllFiles) {
+          $cmd += " --add-binary `"ffmpeg/$($dll.Name);.`""
+        }
+        
+        # Добавляем остальные параметры
+        $cmd += " --collect-all nicegui src/main.py"
+        
+        # Выполняем команду
+        Invoke-Expression $cmd
 
     # 6. Загружаем готовый EXE (без лишних папок)
     - name: Upload Artifact
