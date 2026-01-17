@@ -9,11 +9,7 @@ from pathlib import Path
 from typing import Optional, Callable, List, Dict, Tuple
 import platform
 
-# Детальное логирование для диагностики
-import sys
-import os
-
-# Логируем информацию о Python окружении
+# Логируем информацию о Python окружении для диагностики
 def _log_import_info():
     """Логирует информацию о Python окружении для диагностики"""
     info = {

@@ -166,36 +166,54 @@ def build_interface():
                 # Проверяем доступность pyannote.audio перед запуском
                 try:
                     import sys
-                    import os
-                    smart_log(f"🔍 Диагностика Python окружения:")
+                    smart_log(f"🔍 ДИАГНОСТИКА PYTHON ОКРУЖЕНИЯ:")
                     smart_log(f"   Python: {sys.executable}")
                     smart_log(f"   Версия: {sys.version.split()[0]}")
-                    smart_log(f"   Frozen: {getattr(sys, 'frozen', False)}")
+                    smart_log(f"   Frozen (exe): {getattr(sys, 'frozen', False)}")
+                    smart_log(f"   sys.path (первые 3):")
+                    for i, path in enumerate(sys.path[:3], 1):
+                        smart_log(f"      {i}. {path}")
                     
                     # Пробуем прямой импорт pyannote.audio
+                    smart_log(f"\n🔍 ПРОВЕРКА ИМПОРТА pyannote.audio:")
                     try:
                         import pyannote.audio
-                        smart_log(f"✅ Прямой импорт pyannote.audio: УСПЕХ")
-                        smart_log(f"   Расположение: {pyannote.audio.__file__}")
+                        smart_log(f"   ✅ Прямой импорт: УСПЕХ")
+                        smart_log(f"   📍 Расположение: {pyannote.audio.__file__}")
+                        # Пробуем импортировать Pipeline
+                        try:
+                            from pyannote.audio import Pipeline
+                            smart_log(f"   ✅ Импорт Pipeline: УСПЕХ")
+                        except ImportError as pipeline_error:
+                            smart_log(f"   ⚠️ Импорт Pipeline: ОШИБКА - {str(pipeline_error)}")
                     except ImportError as direct_import_error:
-                        smart_log(f"❌ Прямой импорт pyannote.audio: ОШИБКА")
-                        smart_log(f"   Ошибка: {str(direct_import_error)}")
+                        smart_log(f"   ❌ Прямой импорт: ОШИБКА")
+                        smart_log(f"   📝 Сообщение: {str(direct_import_error)}")
                     
                     # Проверяем через наш модуль
+                    smart_log(f"\n🔍 ПРОВЕРКА ЧЕРЕЗ core.diarization:")
                     from core.diarization import PYANNOTE_AVAILABLE, IMPORT_ERROR
+                    smart_log(f"   PYANNOTE_AVAILABLE: {PYANNOTE_AVAILABLE}")
+                    if IMPORT_ERROR:
+                        smart_log(f"   IMPORT_ERROR: {IMPORT_ERROR}")
+                    
                     if not PYANNOTE_AVAILABLE:
-                        smart_log("⚠️ pyannote.audio не установлен в текущем окружении Python")
-                        if IMPORT_ERROR:
-                            smart_log(f"   Детали ошибки: {IMPORT_ERROR}")
-                        smart_log("💡 Установите: python3 -m pip install pyannote.audio")
-                        smart_log(f"   Или: {sys.executable} -m pip install pyannote.audio")
-                        smart_log("📝 Продолжаем без диаризации...")
+                        smart_log(f"\n⚠️ pyannote.audio НЕ ДОСТУПЕН")
+                        smart_log(f"💡 РЕШЕНИЕ:")
+                        smart_log(f"   1. Установите модуль:")
+                        smart_log(f"      {sys.executable} -m pip install pyannote.audio")
+                        smart_log(f"   2. Или через python3:")
+                        smart_log(f"      python3 -m pip install pyannote.audio")
+                        smart_log(f"   3. Проверьте, что используете правильный Python")
+                        smart_log(f"📝 Продолжаем без диаризации...")
                         result['diarization'] = None
                     else:
+                        smart_log(f"✅ pyannote.audio доступен, инициализация диаризатора...")
                         diarizer = Diarizer(
                             hf_token=hf_token,
                             progress_callback=smart_log
                         )
+                        smart_log(f"✅ Диаризатор инициализирован")
                 except ImportError as e:
                     smart_log(f"⚠️ Ошибка импорта диаризации: {str(e)}")
                     smart_log("📝 Продолжаем без диаризации...")
