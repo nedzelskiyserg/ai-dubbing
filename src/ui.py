@@ -160,6 +160,9 @@ def build_interface():
                 smart_log(f"\n👥 ЗАПУСК ДИАРИЗАЦИИ")
                 smart_log("─" * 40)
                 
+                # Инициализируем diarizer как None по умолчанию
+                diarizer = None
+                
                 # Проверяем доступность pyannote.audio перед запуском
                 try:
                     from core.diarization import PYANNOTE_AVAILABLE
@@ -177,7 +180,10 @@ def build_interface():
                     smart_log(f"⚠️ Ошибка импорта диаризации: {str(e)}")
                     smart_log("📝 Продолжаем без диаризации...")
                     result['diarization'] = None
-                    diarizer = None
+                except Exception as e:
+                    smart_log(f"⚠️ Ошибка инициализации диаризации: {str(e)}")
+                    smart_log("📝 Продолжаем без диаризации...")
+                    result['diarization'] = None
                 
                 if diarizer:
                     try:
