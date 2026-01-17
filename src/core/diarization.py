@@ -13,11 +13,12 @@ try:
     from pyannote.audio import Pipeline
     from pyannote.core import Annotation, Segment
     PYANNOTE_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     PYANNOTE_AVAILABLE = False
     Pipeline = None
     Annotation = None
     Segment = None
+    IMPORT_ERROR = str(e)
 
 # Импортируем пути из config
 from core.config import APP_PATHS
@@ -64,9 +65,10 @@ class Diarizer:
             progress_callback: Функция для отчета о прогрессе
         """
         if not PYANNOTE_AVAILABLE:
-            raise ImportError(
-                "pyannote.audio не установлен. Установите: pip install pyannote.audio"
-            )
+            error_msg = "pyannote.audio не установлен. Установите: pip install pyannote.audio"
+            if 'IMPORT_ERROR' in globals():
+                error_msg += f"\nДетали ошибки: {IMPORT_ERROR}"
+            raise ImportError(error_msg)
         
         self.hf_token = hf_token
         self.progress_callback = progress_callback

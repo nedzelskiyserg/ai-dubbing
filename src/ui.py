@@ -160,40 +160,56 @@ def build_interface():
                 smart_log(f"\n👥 ЗАПУСК ДИАРИЗАЦИИ")
                 smart_log("─" * 40)
                 
+                # Проверяем доступность pyannote.audio перед запуском
                 try:
-                    diarizer = Diarizer(
-                        hf_token=hf_token,
-                        progress_callback=smart_log
-                    )
-                    
-                    # Запускаем диаризацию в executor
-                    diarization_result = await run.io_bound(
-                        diarizer.diarize,
-                        downloaded_video_path
-                    )
-                    
-                    # Связываем транскрипцию с диаризацией
-                    smart_log("🔗 Связывание транскрипции с диаризацией...")
-                    merged_segments = merge_transcription_with_diarization(
-                        result['segments'],
-                        diarization_result['segments']
-                    )
-                    
-                    # Обновляем результат с информацией о спикерах
-                    result['segments'] = merged_segments
-                    result['diarization'] = {
-                        'speakers': diarization_result['speakers'],
-                        'total_speakers': len(diarization_result['speakers']),
-                        'diarization_segments': diarization_result['segments']
-                    }
-                    
-                    smart_log(f"✅ Диаризация завершена!")
-                    smart_log(f"👥 Найдено спикеров: {len(diarization_result['speakers'])}")
-                    
-                except Exception as e:
-                    smart_log(f"⚠️ Ошибка диаризации: {str(e)}")
+                    from core.diarization import PYANNOTE_AVAILABLE
+                    if not PYANNOTE_AVAILABLE:
+                        smart_log("⚠️ pyannote.audio не установлен в текущем окружении Python")
+                        smart_log("💡 Установите: python3 -m pip install pyannote.audio")
+                        smart_log("📝 Продолжаем без диаризации...")
+                        result['diarization'] = None
+                    else:
+                        diarizer = Diarizer(
+                            hf_token=hf_token,
+                            progress_callback=smart_log
+                        )
+                except ImportError as e:
+                    smart_log(f"⚠️ Ошибка импорта диаризации: {str(e)}")
                     smart_log("📝 Продолжаем без диаризации...")
                     result['diarization'] = None
+                    diarizer = None
+                
+                if diarizer:
+                    try:
+                    
+                        # Запускаем диаризацию в executor
+                        diarization_result = await run.io_bound(
+                            diarizer.diarize,
+                            downloaded_video_path
+                        )
+                        
+                        # Связываем транскрипцию с диаризацией
+                        smart_log("🔗 Связывание транскрипции с диаризацией...")
+                        merged_segments = merge_transcription_with_diarization(
+                            result['segments'],
+                            diarization_result['segments']
+                        )
+                        
+                        # Обновляем результат с информацией о спикерах
+                        result['segments'] = merged_segments
+                        result['diarization'] = {
+                            'speakers': diarization_result['speakers'],
+                            'total_speakers': len(diarization_result['speakers']),
+                            'diarization_segments': diarization_result['segments']
+                        }
+                        
+                        smart_log(f"✅ Диаризация завершена!")
+                        smart_log(f"👥 Найдено спикеров: {len(diarization_result['speakers'])}")
+                        
+                    except Exception as e:
+                        smart_log(f"⚠️ Ошибка диаризации: {str(e)}")
+                        smart_log("📝 Продолжаем без диаризации...")
+                        result['diarization'] = None
             
             # Сохраняем результат в папку проекта (рядом с видео)
             video_dir = os.path.dirname(downloaded_video_path)
