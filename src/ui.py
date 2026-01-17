@@ -1,7 +1,9 @@
 from nicegui import ui, run
 import core.downloader as downloader
+from core.transcriber import Transcriber
 from core.config import APP_PATHS, open_folder 
 import asyncio
+import os
 
 def build_interface():
     # --- 1. CSS ФИКСЫ (ОСТАВЛЯЕМ ДЛЯ СТАБИЛЬНОСТИ) ---
@@ -56,6 +58,10 @@ def build_interface():
     link_input = None
     quality_select = None
     log_view = None
+    downloaded_video_path = None
+    transcribe_button = None
+    model_size_select = None
+    language_select = None
 
     # --- ЛОГИКА ---
     def smart_log(message):
@@ -82,8 +88,83 @@ def build_interface():
         result_path = await run.io_bound(downloader.download_video, url, smart_log, quality)
         
         if result_path:
+            nonlocal downloaded_video_path, transcribe_button
+            downloaded_video_path = result_path
+            # Активируем кнопку транскрипции
+            if transcribe_button:
+                transcribe_button.set_enabled(True)
             ui.notify('Готово!', type='positive')
             smart_log(f"✅ СОХРАНЕНО: {result_path}")
+            smart_log(f"📝 Готово к транскрипции! Нажмите кнопку 'ТРАНСКРИБИРОВАТЬ'")
+    
+    async def start_transcription():
+        """Запускает транскрипцию видео в отдельном потоке"""
+        nonlocal downloaded_video_path, transcribe_button
+        
+        if not downloaded_video_path or not os.path.exists(downloaded_video_path):
+            ui.notify('Ошибка: Сначала скачайте видео!', color='negative')
+            return
+        
+        # Отключаем кнопку во время обработки
+        if transcribe_button:
+            transcribe_button.set_enabled(False)
+        
+        model_size = model_size_select.value if model_size_select else 'base'
+        language = language_select.value if language_select else None
+        
+        smart_log(f"\n🎤 ЗАПУСК ТРАНСКРИПЦИИ")
+        smart_log("─" * 40)
+        smart_log(f"📁 Файл: {os.path.basename(downloaded_video_path)}")
+        smart_log(f"🤖 Модель: {model_size}")
+        smart_log(f"🌍 Язык: {language if language else 'Автоопределение'}")
+        
+        try:
+            # Создаем транскрибер с callback для прогресса
+            transcriber = Transcriber(
+                model_size=model_size,
+                device="auto",
+                progress_callback=smart_log
+            )
+            
+            # Запускаем транскрипцию в executor (неблокирующий режим)
+            result = await run.io_bound(
+                transcriber.transcribe,
+                downloaded_video_path,
+                language=language,
+                word_timestamps=True,
+                vad_filter=True
+            )
+            
+            # Сохраняем результат
+            output_dir = APP_PATHS['output']
+            video_name = os.path.splitext(os.path.basename(downloaded_video_path))[0]
+            transcript_path = output_dir / f"{video_name}_transcript.txt"
+            segments_path = output_dir / f"{video_name}_segments.json"
+            
+            # Сохраняем полный текст
+            with open(transcript_path, 'w', encoding='utf-8') as f:
+                f.write(result['text'])
+            
+            # Сохраняем сегменты с временными метками (можно использовать json)
+            import json
+            with open(segments_path, 'w', encoding='utf-8') as f:
+                json.dump(result, f, ensure_ascii=False, indent=2)
+            
+            smart_log(f"✅ Транскрипция завершена!")
+            smart_log(f"📄 Текст сохранен: {transcript_path}")
+            smart_log(f"📊 Сегменты сохранены: {segments_path}")
+            smart_log(f"🌍 Язык: {result['language']} (вероятность: {result['language_probability']:.2%})")
+            smart_log(f"📝 Всего сегментов: {len(result['segments'])}")
+            
+            ui.notify('Транскрипция завершена!', type='positive')
+            
+        except Exception as e:
+            smart_log(f"❌ Ошибка транскрипции: {str(e)}")
+            ui.notify(f'Ошибка: {str(e)}', color='negative')
+        finally:
+            # Включаем кнопку обратно
+            if transcribe_button:
+                transcribe_button.set_enabled(True)
 
     # --- ВЕРСТКА ---
     # value=80 -> Верх 80%, Низ 20%
@@ -117,12 +198,30 @@ def build_interface():
 
                         ui.label('Шаг 2: Обработка').classes('text-lg font-bold text-gray-400')
                         with ui.row().classes('w-full gap-4 items-center mt-2'):
-                            ui.select(['Русский', 'Английский'], value='Русский', label='Язык').classes('w-48').props('disable')
+                            language_select = ui.select(
+                                {'ru': 'Русский', 'en': 'Английский', None: 'Авто'},
+                                value=None,
+                                label='Язык'
+                            ).classes('w-48')
                             ui.checkbox('Клонировать голос').props('disable')
+                        
+                        with ui.row().classes('w-full gap-4 items-center mt-2'):
+                            model_size_select = ui.select(
+                                {'tiny': 'Tiny (быстро)', 'base': 'Base (рекомендуется)', 'small': 'Small', 'medium': 'Medium', 'large-v3': 'Large (медленно)'},
+                                value='base',
+                                label='Модель'
+                            ).classes('w-48')
 
                         ui.button('СКАЧАТЬ ВИДЕО', on_click=start_processing) \
                             .classes('w-full mt-8 h-12 text-lg font-bold text-white shadow-lg') \
                             .props('color=primary')
+                        
+                        ui.separator().classes('my-6')
+                        
+                        transcribe_button = ui.button('ТРАНСКРИБИРОВАТЬ', on_click=lambda: start_transcription()) \
+                            .classes('w-full h-12 text-lg font-bold text-white shadow-lg') \
+                            .props('color=secondary') \
+                            .set_enabled(False)
 
                 with ui.tab_panel(tab_shorts):
                     ui.label('В разработке...').classes('text-gray-500 q-pa-md')

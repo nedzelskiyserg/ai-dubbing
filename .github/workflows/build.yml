@@ -61,7 +61,7 @@ jobs:
         }
         
         # Добавляем остальные параметры
-        $cmd += " --collect-all nicegui src/main.py"
+        $cmd += " --collect-all nicegui --collect-all faster_whisper src/main.py"
         
         # Выполняем команду
         Invoke-Expression $cmd

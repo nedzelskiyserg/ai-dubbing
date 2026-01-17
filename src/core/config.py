@@ -22,13 +22,25 @@ def get_app_paths():
         "base": base_dir,
         "downloads": base_dir / "Downloads",
         "output": base_dir / "Output",
-        "temp": base_dir / "Temp"
+        "temp": base_dir / "Temp",
+        "models": base_dir / "Models"
     }
 
     # Создаем папки, если их нет
     for key, path in paths.items():
         if not path.exists():
             path.mkdir(parents=True, exist_ok=True)
+    
+    # Также создаем папку models рядом с exe (если запущено из exe)
+    if getattr(sys, 'frozen', False):
+        import platform
+        if platform.system() == 'Windows':
+            exe_dir = Path(sys.executable).parent
+        else:
+            exe_dir = Path(sys.executable).parent
+        exe_models_dir = exe_dir / "models"
+        if not exe_models_dir.exists():
+            exe_models_dir.mkdir(parents=True, exist_ok=True)
             
     return paths
 
