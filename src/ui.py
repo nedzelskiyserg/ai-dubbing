@@ -1,6 +1,7 @@
 from nicegui import ui, run
 import core.downloader as downloader
 from core.transcriber import Transcriber
+from core.diarization import Diarizer, merge_transcription_with_diarization
 from core.config import APP_PATHS, open_folder 
 import asyncio
 import os
@@ -61,6 +62,8 @@ def build_interface():
     log_view = None
     downloaded_video_path = None
     transcribe_checkbox = None
+    diarize_checkbox = None
+    hf_token_input = None
     model_size_select = None
     language_select = None
 
@@ -102,25 +105,30 @@ def build_interface():
                 smart_log(f"📝 Видео готово. Включите 'Транскрибировать после скачивания' для автоматической транскрипции.")
     
     async def start_transcription():
-        """Запускает транскрипцию видео в отдельном потоке"""
+        """Запускает транскрипцию и диаризацию видео в отдельном потоке"""
         nonlocal downloaded_video_path
         
         if not downloaded_video_path or not os.path.exists(downloaded_video_path):
             ui.notify('Ошибка: Сначала скачайте видео!', color='negative')
             return
         
-        # Отключаем чекбокс во время обработки
+        # Отключаем чекбоксы во время обработки
         if transcribe_checkbox:
             transcribe_checkbox.set_enabled(False)
+        if diarize_checkbox:
+            diarize_checkbox.set_enabled(False)
         
         model_size = model_size_select.value if model_size_select else 'base'
         language = language_select.value if language_select else None
+        enable_diarization = diarize_checkbox.value if diarize_checkbox else False
+        hf_token = hf_token_input.value.strip() if hf_token_input and hf_token_input.value else None
         
         smart_log(f"\n🎤 ЗАПУСК ТРАНСКРИПЦИИ")
         smart_log("─" * 40)
         smart_log(f"📁 Файл: {os.path.basename(downloaded_video_path)}")
         smart_log(f"🤖 Модель: {model_size}")
         smart_log(f"🌍 Язык: {language if language else 'Автоопределение'}")
+        smart_log(f"👥 Диаризация: {'Включена' if enable_diarization else 'Выключена'}")
         
         try:
             # Создаем транскрибер с callback для прогресса
@@ -139,6 +147,46 @@ def build_interface():
                 vad_filter=True
             )
             
+            # Если включена диаризация, выполняем её
+            if enable_diarization:
+                smart_log(f"\n👥 ЗАПУСК ДИАРИЗАЦИИ")
+                smart_log("─" * 40)
+                
+                try:
+                    diarizer = Diarizer(
+                        hf_token=hf_token,
+                        progress_callback=smart_log
+                    )
+                    
+                    # Запускаем диаризацию в executor
+                    diarization_result = await run.io_bound(
+                        diarizer.diarize,
+                        downloaded_video_path
+                    )
+                    
+                    # Связываем транскрипцию с диаризацией
+                    smart_log("🔗 Связывание транскрипции с диаризацией...")
+                    merged_segments = merge_transcription_with_diarization(
+                        result['segments'],
+                        diarization_result['segments']
+                    )
+                    
+                    # Обновляем результат с информацией о спикерах
+                    result['segments'] = merged_segments
+                    result['diarization'] = {
+                        'speakers': diarization_result['speakers'],
+                        'total_speakers': len(diarization_result['speakers']),
+                        'diarization_segments': diarization_result['segments']
+                    }
+                    
+                    smart_log(f"✅ Диаризация завершена!")
+                    smart_log(f"👥 Найдено спикеров: {len(diarization_result['speakers'])}")
+                    
+                except Exception as e:
+                    smart_log(f"⚠️ Ошибка диаризации: {str(e)}")
+                    smart_log("📝 Продолжаем без диаризации...")
+                    result['diarization'] = None
+            
             # Сохраняем результат в папку проекта (рядом с видео)
             video_dir = os.path.dirname(downloaded_video_path)
             video_name = os.path.splitext(os.path.basename(downloaded_video_path))[0]
@@ -147,12 +195,24 @@ def build_interface():
             transcript_path = os.path.join(video_dir, f"{video_name}_transcript.txt")
             segments_path = os.path.join(video_dir, f"{video_name}_segments.json")
             
+            # Формируем текст транскрипции с информацией о спикерах (если есть)
+            transcript_text = ""
+            if enable_diarization and result.get('diarization'):
+                # Формат: [СПИКЕР] текст
+                for seg in result['segments']:
+                    speaker = seg.get('speaker', 'UNKNOWN')
+                    text = seg.get('text', '').strip()
+                    if text:
+                        transcript_text += f"[{speaker}] {text}\n"
+            else:
+                # Обычный текст без спикеров
+                transcript_text = result['text']
+            
             # Сохраняем полный текст транскрипции
             with open(transcript_path, 'w', encoding='utf-8') as f:
-                f.write(result['text'])
+                f.write(transcript_text)
             
-            # Сохраняем сегменты с временными метками в JSON
-            import json
+            # Сохраняем сегменты с временными метками в JSON (включая диаризацию)
             with open(segments_path, 'w', encoding='utf-8') as f:
                 json.dump(result, f, ensure_ascii=False, indent=2)
             
@@ -161,6 +221,8 @@ def build_interface():
             smart_log(f"📊 Сегменты сохранены: {segments_path}")
             smart_log(f"🌍 Язык: {result['language']} (вероятность: {result['language_probability']:.2%})")
             smart_log(f"📝 Всего сегментов: {len(result['segments'])}")
+            if enable_diarization and result.get('diarization'):
+                smart_log(f"👥 Спикеров: {result['diarization']['total_speakers']}")
             
             ui.notify('Транскрипция завершена!', type='positive')
             
@@ -168,9 +230,11 @@ def build_interface():
             smart_log(f"❌ Ошибка транскрипции: {str(e)}")
             ui.notify(f'Ошибка: {str(e)}', color='negative')
         finally:
-            # Включаем чекбокс обратно
+            # Включаем чекбоксы обратно
             if transcribe_checkbox:
                 transcribe_checkbox.set_enabled(True)
+            if diarize_checkbox:
+                diarize_checkbox.set_enabled(True)
 
     # --- ВЕРСТКА ---
     # value=80 -> Верх 80%, Низ 20%
@@ -218,9 +282,19 @@ def build_interface():
                                 label='Модель'
                             ).classes('w-48')
                         
-                        # Чекбокс для автоматической транскрипции после скачивания
+                        # Чекбоксы для обработки
                         transcribe_checkbox = ui.checkbox('Транскрибировать после скачивания', value=False) \
                             .classes('mt-4')
+                        
+                        diarize_checkbox = ui.checkbox('Диаризация (разделение спикеров)', value=False) \
+                            .classes('mt-2')
+                        
+                        # Поле для Hugging Face token (опционально, для диаризации)
+                        hf_token_input = ui.input(
+                            label='Hugging Face Token (для диаризации)',
+                            placeholder='hf_... (опционально)',
+                            password=True
+                        ).classes('w-full mt-2').props('clearable')
                         
                         ui.button('СКАЧАТЬ ВИДЕО', on_click=start_processing) \
                             .classes('w-full mt-8 h-12 text-lg font-bold text-white shadow-lg') \

@@ -4,3 +4,6 @@ pyinstaller
 pytubefix
 faster-whisper
 certifi
+pyannote.audio>=3.1.0
+torch
+torchaudio

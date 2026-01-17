@@ -60,8 +60,8 @@ jobs:
           $cmd += " --add-binary `"ffmpeg/$($dll.Name);.`""
         }
         
-        # Добавляем остальные параметры
-        $cmd += " --collect-all nicegui --collect-all faster_whisper src/main.py"
+            # Добавляем остальные параметры
+            $cmd += " --collect-all nicegui --collect-all faster_whisper --collect-all pyannote src/main.py"
         
         # Выполняем команду
         Invoke-Expression $cmd
