@@ -60,7 +60,7 @@ def build_interface():
     quality_select = None
     log_view = None
     downloaded_video_path = None
-    transcribe_button = None
+    transcribe_checkbox = None
     model_size_select = None
     language_select = None
 
@@ -89,26 +89,29 @@ def build_interface():
         result_path = await run.io_bound(downloader.download_video, url, smart_log, quality)
         
         if result_path:
-            nonlocal downloaded_video_path, transcribe_button
+            nonlocal downloaded_video_path
             downloaded_video_path = result_path
-            # Активируем кнопку транскрипции
-            if transcribe_button:
-                transcribe_button.set_enabled(True)
             ui.notify('Готово!', type='positive')
             smart_log(f"✅ СОХРАНЕНО: {result_path}")
-            smart_log(f"📝 Готово к транскрипции! Нажмите кнопку 'ТРАНСКРИБИРОВАТЬ'")
+            
+            # Если чекбокс транскрипции включен, запускаем автоматически
+            if transcribe_checkbox and transcribe_checkbox.value:
+                smart_log(f"📝 Автоматический запуск транскрипции...")
+                await start_transcription()
+            else:
+                smart_log(f"📝 Видео готово. Включите 'Транскрибировать после скачивания' для автоматической транскрипции.")
     
     async def start_transcription():
         """Запускает транскрипцию видео в отдельном потоке"""
-        nonlocal downloaded_video_path, transcribe_button
+        nonlocal downloaded_video_path
         
         if not downloaded_video_path or not os.path.exists(downloaded_video_path):
             ui.notify('Ошибка: Сначала скачайте видео!', color='negative')
             return
         
-        # Отключаем кнопку во время обработки
-        if transcribe_button:
-            transcribe_button.set_enabled(False)
+        # Отключаем чекбокс во время обработки
+        if transcribe_checkbox:
+            transcribe_checkbox.set_enabled(False)
         
         model_size = model_size_select.value if model_size_select else 'base'
         language = language_select.value if language_select else None
@@ -163,9 +166,9 @@ def build_interface():
             smart_log(f"❌ Ошибка транскрипции: {str(e)}")
             ui.notify(f'Ошибка: {str(e)}', color='negative')
         finally:
-            # Включаем кнопку обратно
-            if transcribe_button:
-                transcribe_button.set_enabled(True)
+            # Включаем чекбокс обратно
+            if transcribe_checkbox:
+                transcribe_checkbox.set_enabled(True)
 
     # --- ВЕРСТКА ---
     # value=80 -> Верх 80%, Низ 20%
@@ -212,17 +215,14 @@ def build_interface():
                                 value='base',
                                 label='Модель'
                             ).classes('w-48')
-
+                        
+                        # Чекбокс для автоматической транскрипции после скачивания
+                        transcribe_checkbox = ui.checkbox('Транскрибировать после скачивания', value=False) \
+                            .classes('mt-4')
+                        
                         ui.button('СКАЧАТЬ ВИДЕО', on_click=start_processing) \
                             .classes('w-full mt-8 h-12 text-lg font-bold text-white shadow-lg') \
                             .props('color=primary')
-                        
-                        ui.separator().classes('my-6')
-                        
-                        transcribe_button = ui.button('ТРАНСКРИБИРОВАТЬ', on_click=lambda: start_transcription()) \
-                            .classes('w-full h-12 text-lg font-bold text-white shadow-lg') \
-                            .props('color=secondary') \
-                            .set_enabled(False)
 
                 with ui.tab_panel(tab_shorts):
                     ui.label('В разработке...').classes('text-gray-500 q-pa-md')
