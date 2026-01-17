@@ -139,17 +139,19 @@ def build_interface():
                 vad_filter=True
             )
             
-            # Сохраняем результат
-            output_dir = APP_PATHS['output']
+            # Сохраняем результат в папку проекта (рядом с видео)
+            video_dir = os.path.dirname(downloaded_video_path)
             video_name = os.path.splitext(os.path.basename(downloaded_video_path))[0]
-            transcript_path = output_dir / f"{video_name}_transcript.txt"
-            segments_path = output_dir / f"{video_name}_segments.json"
             
-            # Сохраняем полный текст
+            # Пути для сохранения в папке проекта
+            transcript_path = os.path.join(video_dir, f"{video_name}_transcript.txt")
+            segments_path = os.path.join(video_dir, f"{video_name}_segments.json")
+            
+            # Сохраняем полный текст транскрипции
             with open(transcript_path, 'w', encoding='utf-8') as f:
                 f.write(result['text'])
             
-            # Сохраняем сегменты с временными метками (можно использовать json)
+            # Сохраняем сегменты с временными метками в JSON
             import json
             with open(segments_path, 'w', encoding='utf-8') as f:
                 json.dump(result, f, ensure_ascii=False, indent=2)

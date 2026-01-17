@@ -169,19 +169,25 @@ def download_video(url, log_func, target_quality='1080p'):
         # 4. Поиск аудио
         audio_stream = yt.streams.filter(only_audio=True).order_by("abr").desc().first()
 
-        # Имена файлов (Temp кладем туда же или в папку Temp, давай пока рядом для простоты)
+        # Создаем отдельную папку для этого видео
+        video_folder_name = f"{video_title}_{video_stream.resolution}"
+        video_folder = os.path.join(output_folder, video_folder_name)
+        os.makedirs(video_folder, exist_ok=True)
+        log_func(f"📁 Создана папка проекта: {video_folder_name}")
+        
+        # Имена файлов
         timestamp = int(time.time())
         temp_video_name = f"temp_v_{timestamp}.mp4"
         temp_audio_name = f"temp_a_{timestamp}.mp4"
         final_filename = f"{video_title}_{video_stream.resolution}.mp4"
-        final_path = os.path.join(output_folder, final_filename)
+        final_path = os.path.join(video_folder, final_filename)
 
         # 5. Скачивание
         log_func("🚀 Скачивание видео...")
-        video_stream.download(output_path=output_folder, filename=temp_video_name)
+        video_stream.download(output_path=video_folder, filename=temp_video_name)
         
         log_func("🚀 Скачивание аудио...")
-        audio_stream.download(output_path=output_folder, filename=temp_audio_name)
+        audio_stream.download(output_path=video_folder, filename=temp_audio_name)
 
         ffmpeg_exe = get_ffmpeg_path()
         if not ffmpeg_exe:
@@ -190,8 +196,8 @@ def download_video(url, log_func, target_quality='1080p'):
 
         # 6. Склейка
         log_func("🔨 Сборка файла...")
-        video_path = os.path.join(output_folder, temp_video_name)
-        audio_path = os.path.join(output_folder, temp_audio_name)
+        video_path = os.path.join(video_folder, temp_video_name)
+        audio_path = os.path.join(video_folder, temp_audio_name)
         
         cmd = [
             ffmpeg_exe, '-i', video_path, '-i', audio_path,
