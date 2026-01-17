@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import sys
 from pathlib import Path
@@ -98,8 +99,8 @@ class Transcriber:
         condition_on_previous_text: bool = True,
         initial_prompt: Optional[str] = None,
         word_timestamps: bool = True,
-        prepend_punctuations: str = "\"'"¿([{-",
-        append_punctuations: str = "\"'.。,，!！?？:：")]}、",
+        prepend_punctuations: str = """\"'¿([{-""",
+        append_punctuations: str = """\"'.。,，!！?？:：")]}、""",
         vad_filter: bool = True,
         vad_parameters: Optional[dict] = None
     ) -> dict:
