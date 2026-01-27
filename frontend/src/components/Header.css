@@ -1,0 +1,96 @@
+.header {
+  height: 64px;
+  background: #0F0F0F;
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  -webkit-app-region: drag; /* Для перетаскивания окна в Electron */
+  user-select: none; /* Предотвращаем выделение текста при перетаскивании */
+  position: relative;
+}
+
+.header::after {
+  content: '';
+  position: absolute;
+  bottom: -3px;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: #2A2A2A;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.logo-block {
+  width: 40px;
+  height: 40px;
+  background: #FFD600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0;
+}
+
+.logo-text {
+  font-family: 'Geist Mono', monospace;
+  font-size: 16px;
+  font-weight: 700;
+  color: #1A1A1A;
+}
+
+.title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.title-label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  font-weight: normal;
+  color: #FFD600;
+  letter-spacing: 1px;
+}
+
+.title-text {
+  font-family: 'Geist Mono', monospace;
+  font-size: 18px;
+  font-weight: 700;
+  color: #F5F5F0;
+  letter-spacing: 1px;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.folder-btn {
+  width: 40px;
+  height: 40px;
+  border: 2px solid #3D3D3D;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: border-color 0.2s;
+  -webkit-app-region: no-drag; /* Кнопка не должна перетаскивать окно */
+}
+
+.folder-btn:hover {
+  border-color: #6B6B6B;
+}
+
+.folder-btn .material-symbols-outlined {
+  font-size: 24px;
+  color: #F5F5F0;
+  font-weight: 200;
+}
+

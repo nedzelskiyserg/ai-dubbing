@@ -1,0 +1,440 @@
+.app {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #1A1A1A;
+  overflow: hidden;
+}
+
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.content-wrapper {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  width: 100%;
+}
+
+.content-inner {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  width: 100%;
+  position: relative;
+}
+
+/* Контейнер для страниц с анимацией */
+.page-content {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  width: 100%;
+  position: relative;
+}
+
+/* Анимация перехода страниц */
+.page-content.page-active {
+  animation: pageFadeIn 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.page-content.page-inactive {
+  display: none;
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+@keyframes pageFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Placeholder для Shorts Generator */
+.shorts-generator-placeholder {
+  width: 100%;
+  min-height: 400px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0F0F0F;
+  border: 3px solid #2A2A2A;
+}
+
+.placeholder-content {
+  text-align: center;
+}
+
+.placeholder-content h2 {
+  font-family: 'Geist Mono', monospace;
+  font-size: 24px;
+  font-weight: 700;
+  color: #F5F5F0;
+  letter-spacing: 2px;
+  margin-bottom: 16px;
+}
+
+.placeholder-content p {
+  font-family: 'Geist Mono', monospace;
+  font-size: 14px;
+  color: #6B6B6B;
+  letter-spacing: 1px;
+}
+
+/* Panel styles */
+.panel {
+  background: #0F0F0F;
+  border: 3px solid #2A2A2A;
+  width: 100%;
+}
+
+.panel-header {
+  height: 56px;
+  padding: 0 24px;
+  border-bottom: 2px solid #2A2A2A;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.panel-label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  font-weight: normal;
+  color: #6B6B6B;
+  letter-spacing: 1px;
+}
+
+.panel-title {
+  font-family: 'Geist Mono', monospace;
+  font-size: 14px;
+  font-weight: 700;
+  color: #F5F5F0;
+  letter-spacing: 1px;
+}
+
+.panel-content {
+  padding: 24px;
+}
+
+/* Section styles */
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  cursor: pointer;
+  padding: 12px 0;
+  margin: -12px 0;
+  border-radius: 4px;
+  transition: background-color 0.2s ease;
+  user-select: none;
+  position: relative;
+}
+
+.section-header::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -24px;
+  right: -24px;
+  bottom: 0;
+  border-radius: 4px;
+  transition: background-color 0.2s ease;
+  z-index: -1;
+}
+
+.section-header:hover::before {
+  background-color: rgba(42, 42, 42, 0.3);
+}
+
+.section-header:active::before {
+  background-color: rgba(42, 42, 42, 0.5);
+}
+
+.section-title-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.section-title {
+  font-family: 'Geist Mono', monospace;
+  font-size: 12px;
+  font-weight: 700;
+  color: #F5F5F0;
+  letter-spacing: 1px;
+}
+
+.section-arrow {
+  color: #6B6B6B;
+  font-size: 10px;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+              color 0.2s ease;
+  display: inline-block;
+  line-height: 1;
+}
+
+.section-arrow.expanded {
+  transform: rotate(0deg);
+}
+
+.section-header:hover .section-arrow {
+  color: #8B8B8B;
+}
+
+.divider {
+  width: 100%;
+  height: 2px;
+  background: #2A2A2A;
+}
+
+/* Input styles */
+.input-field {
+  -webkit-app-region: no-drag; /* Input поля не должны перетаскивать окно */
+  background: #1A1A1A;
+  border: 2px solid #2A2A2A;
+  color: #4D4D4D;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 13px;
+  padding: 0 16px;
+  height: 52px;
+  width: 100%;
+  outline: none;
+}
+
+.input-field:focus {
+  border-color: #FFD600;
+  color: #F5F5F0;
+}
+
+.input-field:not(:placeholder-shown) {
+  color: #F5F5F0;
+}
+
+.select-field {
+  -webkit-app-region: no-drag; /* Select поля не должны перетаскивать окно */
+  background: #1A1A1A;
+  border: 2px solid #2A2A2A;
+  color: #F5F5F0;
+  font-family: 'Geist Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 0 12px;
+  padding-right: 28px; /* Место для иконки */
+  height: 44px;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-image: none;
+  position: relative;
+  width: 100%;
+}
+
+.select-field:focus {
+  border-color: #FFD600;
+}
+
+/* Стили для выпадающего списка (option) */
+.select-field option {
+  background: #1A1A1A;
+  color: #F5F5F0;
+  font-family: 'Geist Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 8px 12px;
+  border: none;
+}
+
+.select-field option:hover {
+  background: #2A2A2A;
+}
+
+.select-field option:checked,
+.select-field option:focus {
+  background: #2A2A2A;
+  color: #FFD600;
+}
+
+/* Кастомная стрелка для select */
+.select-field-wrapper {
+  position: relative;
+  display: inline-block;
+  width: 100%;
+}
+
+.select-field-wrapper::after {
+  content: '▼';
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  /* font-family: 'Geist Mono', monospace; */
+  font-size: 9px;
+  font-weight: normal;
+  color: #6B6B6B;
+  pointer-events: none;
+  z-index: 1;
+  line-height: 1;
+}
+
+/* Checkbox styles */
+.checkbox-container {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  position: relative;
+}
+
+.checkbox {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #3D3D3D;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  border-radius: 2px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+}
+
+.checkbox::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-radius: 50%;
+  background: rgba(255, 214, 0, 0.2);
+  transform: translate(-50%, -50%);
+  transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1), 
+              height 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
+}
+
+.checkbox:hover {
+  border-color: #5D5D5D;
+  transform: scale(1.05);
+}
+
+.checkbox:hover::before {
+  width: 32px;
+  height: 32px;
+}
+
+.checkbox:active {
+  transform: scale(0.95);
+}
+
+.checkbox.checked {
+  background: #FFD600;
+  border-color: #FFD600;
+  animation: checkboxCheck 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.checkbox.checked::before {
+  width: 0;
+  height: 0;
+}
+
+.checkbox.checked:hover {
+  background: #FFE033;
+  border-color: #FFE033;
+}
+
+.checkbox-checkmark {
+  color: #1A1A1A;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  display: inline-block;
+  transform: scale(0) rotate(-45deg);
+  opacity: 0;
+  transition: transform 0.2s cubic-bezier(0.68, -0.55, 0.265, 1.55),
+              opacity 0.2s ease-out;
+}
+
+.checkbox.checked .checkbox-checkmark {
+  transform: scale(1) rotate(0deg);
+  opacity: 1;
+  animation: checkmarkPop 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+@keyframes checkboxCheck {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes checkmarkPop {
+  0% {
+    transform: scale(0) rotate(-45deg);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.2) rotate(5deg);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+    opacity: 1;
+  }
+}
+
+.checkbox-label {
+  font-family: 'Geist Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  color: #F5F5F0;
+  transition: color 0.3s ease;
+  cursor: pointer;
+  user-select: none;
+}
+
+.checkbox-label.unchecked {
+  color: #6B6B6B;
+  transition: color 0.3s ease;
+}
+
+.checkbox-container:hover .checkbox-label {
+  color: #F5F5F0;
+}
+
+.checkbox-container:hover .checkbox-label.unchecked {
+  color: #8B8B8B;
+}

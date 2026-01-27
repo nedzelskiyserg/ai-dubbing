@@ -1,0 +1,168 @@
+.terminal-panel {
+  background: #0A0A0A;
+  /* border-top: 3px solid #2A2A2A; */
+  display: flex;
+  flex-direction: column;
+  min-height: 200px;
+  max-height: 800px;
+  position: relative;
+}
+
+.terminal-header {
+  height: 36px;
+  background: #0F0F0F;
+  border-bottom: 2px solid #2A2A2A;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  user-select: none;
+}
+
+.terminal-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.terminal-icon {
+  font-size: 14px;
+  color: #FFD600;
+}
+
+.terminal-label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  color: #FFD600;
+  letter-spacing: 1px;
+}
+
+.terminal-clear {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 2px solid #3D3D3D;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: border-color 0.2s;
+  user-select: none;
+}
+
+.terminal-clear:hover {
+  border-color: #6B6B6B;
+}
+
+.clear-icon {
+  font-size: 12px;
+  color: #6B6B6B;
+}
+
+.clear-text {
+  font-family: 'Geist Mono', monospace;
+  font-size: 9px;
+  font-weight: 700;
+  color: #6B6B6B;
+  letter-spacing: 1px;
+}
+
+.terminal-resize-handle {
+  height: 5px;
+  background: #2A2A2A;
+  cursor: ns-resize;
+  position: relative;
+  transition: background 0.2s;
+  flex-shrink: 0;
+  z-index: 10;
+  user-select: none;
+}
+
+.terminal-resize-handle:hover {
+  background: #3D3D3D;
+}
+
+.terminal-resize-handle.resizing {
+  background: #FFD600;
+}
+
+.resize-handle-line {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 35px;
+  height: 2px;
+  background: #6B6B6B;
+  border-radius: 1px;
+}
+
+.terminal-resize-handle:hover .resize-handle-line,
+.terminal-resize-handle.resizing .resize-handle-line {
+  background: #FFD600;
+}
+
+.terminal-content {
+  flex: 1;
+  padding: 16px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: #FFD600;
+  line-height: 1.5;
+  scroll-behavior: smooth;
+  user-select: text;
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
+}
+
+.terminal-line {
+  margin-bottom: 4px;
+  user-select: text;
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
+  cursor: text;
+}
+
+.terminal-cursor {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  user-select: none;
+  pointer-events: none;
+}
+
+.cursor-prompt {
+  color: #FFD600;
+}
+
+.cursor-blink {
+  color: #FFD600;
+  animation: blink 1s infinite;
+}
+
+@keyframes blink {
+  0%, 50% {
+    opacity: 1;
+  }
+  51%, 100% {
+    opacity: 0;
+  }
+}
+
+/* Стили для выделенного текста в терминале */
+.terminal-content::selection,
+.terminal-line::selection {
+  background: rgba(255, 214, 0, 0.3);
+  color: #FFD600;
+}
+
+.terminal-content::-moz-selection,
+.terminal-line::-moz-selection {
+  background: rgba(255, 214, 0, 0.3);
+  color: #FFD600;
+}

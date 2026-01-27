@@ -2,23 +2,81 @@
 __pycache__/
 *.py[cod]
 *$py.class
-.venv/
+*.so
+.Python
 venv/
-.env
+venv_*/
+env/
+ENV/
+.venv
+*.egg-info/
+dist/
+build/
+*.egg
 
-# Загрузки и временные файлы (ВАЖНО!)
-downloads/
-output/
-tests/downloads/
-*.mp4
-*.mp3
-*.wav
-*.json
-!requirements.txt
-!src/**/*.json
+# Electron
+frontend/dist-electron/
+frontend/build/
+frontend/node_modules/
+frontend/.pnp
+frontend/.pnp.js
 
-# Системные файлы
+# Python backend build
+python-backend-dist/
+venv_build/
+
+# FFmpeg
+ffmpeg/
+ffmpeg.zip
+ffmpeg_temp/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment
+.env
+.env.local
+
+# Testing
+.coverage
+.pytest_cache/
+
+# PyInstaller
+*.spec
 
 # Модели Whisper (слишком большие для git)
 models/
+models/**
+venv_tts/
+
+# Загрузки и временные файлы (ВАЖНО!)
+downloads/
+downloads/**
+output/
+output/**
+temp/
+temp/**
+src/temp/
+src/temp/**
+voices/
+voices/**
+*.mp4
+*.mp3
+*.wav
+*.avi
+*.mov
+*.mkv

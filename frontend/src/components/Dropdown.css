@@ -1,0 +1,136 @@
+.dropdown-wrapper {
+  position: relative;
+  width: 100%;
+  display: inline-block;
+}
+
+.dropdown-trigger {
+  -webkit-app-region: no-drag;
+  background: #1A1A1A;
+  border: 2px solid #2A2A2A;
+  color: #F5F5F0;
+  font-family: 'Geist Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 0 12px;
+  padding-right: 28px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  transition: border-color 0.2s;
+  position: relative;
+}
+
+.dropdown-trigger:hover {
+  border-color: #3D3D3D;
+}
+
+.dropdown-trigger:focus,
+.dropdown-wrapper.open .dropdown-trigger {
+  border-color: #FFD600;
+  outline: none;
+}
+
+.dropdown-wrapper.disabled .dropdown-trigger {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dropdown-value {
+  flex: 1;
+  text-align: left;
+  letter-spacing: 1px;
+}
+
+.dropdown-arrow {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 9px;
+  font-weight: normal;
+  color: #6B6B6B;
+  transition: transform 0.2s;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dropdown-wrapper.open .dropdown-arrow {
+  transform: translateY(-50%) rotate(180deg);
+}
+
+.dropdown-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: #1A1A1A;
+  border: 2px solid #2A2A2A;
+  border-radius: 0;
+  z-index: 1000;
+  overflow-y: auto;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.dropdown-menu::-webkit-scrollbar {
+  width: 8px;
+}
+
+.dropdown-menu::-webkit-scrollbar-track {
+  background: #0A0A0A;
+}
+
+.dropdown-menu::-webkit-scrollbar-thumb {
+  background: #2A2A2A;
+  border-radius: 4px;
+}
+
+.dropdown-menu::-webkit-scrollbar-thumb:hover {
+  background: #3D3D3D;
+}
+
+.dropdown-option {
+  padding: 10px 12px;
+  font-family: 'Geist Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  color: #F5F5F0;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+  letter-spacing: 1px;
+}
+
+.dropdown-option:hover {
+  background: #2A2A2A;
+}
+
+.dropdown-option.selected {
+  background: #2A2A2A;
+  color: #FFD600;
+}
+
+/* Quality select специфичные стили */
+.quality-dropdown .dropdown-trigger {
+  height: 52px;
+  font-size: 12px;
+  padding-right: 28px;
+}
+
+.quality-dropdown .dropdown-arrow {
+  right: 16px;
+  font-size: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.quality-dropdown.open .dropdown-arrow {
+  transform: translateY(-50%) rotate(180deg);
+}
+
+.quality-dropdown .dropdown-option {
+  font-size: 12px;
+}

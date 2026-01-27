@@ -1,0 +1,120 @@
+name: Build Electron App
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    # 1. Скачиваем код репозитория
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    # 2. Устанавливаем Node.js
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: frontend/package-lock.json
+
+    # 3. Устанавливаем Python 3.10 для сборки Python зависимостей
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    # 4. Создаем .env файл из секрета (для Hugging Face токена)
+    - name: Create .env file from secret
+      shell: pwsh
+      run: |
+        if ($env:HF_TOKEN) {
+          "HF_TOKEN=$env:HF_TOKEN" | Out-File -FilePath .env -Encoding utf8
+          Write-Host "✅ .env файл создан из секрета"
+        } else {
+          Write-Host "⚠️ HF_TOKEN секрет не установлен, диаризация может не работать"
+        }
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+    # 5. Устанавливаем зависимости Node.js
+    - name: Install Node.js dependencies
+      working-directory: ./frontend
+      run: npm ci
+
+    # 6. Собираем React приложение
+    - name: Build React app
+      working-directory: ./frontend
+      run: npm run build
+      env:
+        CI: false
+        GENERATE_SOURCEMAP: false
+
+    # 7. Устанавливаем Python зависимости (для проверки и создания venv)
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    # 8. Скачиваем FFmpeg для Windows
+    - name: Download FFmpeg
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force -Path ffmpeg
+        Write-Host "Скачивание FFmpeg..."
+        Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile "ffmpeg.zip"
+        Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg_temp -Force
+        # Копируем ffmpeg.exe из распакованной папки
+        $ffmpegPath = Get-ChildItem -Path ffmpeg_temp -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+        Copy-Item $ffmpegPath.FullName -Destination ffmpeg\ffmpeg.exe
+        # Также копируем необходимые DLL файлы
+        $dllFiles = Get-ChildItem -Path $ffmpegPath.DirectoryName -Filter *.dll
+        foreach ($dll in $dllFiles) {
+          Copy-Item $dll.FullName -Destination ffmpeg\
+        }
+        Write-Host "✅ FFmpeg установлен"
+
+    # 9. Копируем FFmpeg в build директорию для включения в Electron
+    - name: Copy FFmpeg to build directory
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force -Path frontend/build/ffmpeg
+        Copy-Item -Path ffmpeg\* -Destination frontend/build/ffmpeg\ -Recurse -Force
+        Write-Host "✅ FFmpeg скопирован в build директорию"
+
+    # 10. Упаковываем Python backend с PyInstaller
+    - name: Package Python backend
+      shell: pwsh
+      run: |
+        .\build-python-backend.ps1
+
+    # 12. Собираем Electron приложение
+    - name: Build Electron app
+      working-directory: ./frontend
+      run: npm run dist:win
+      env:
+        ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder-cache
+        CI: false
+
+    # 13. Загружаем артефакты
+    - name: Upload Windows Installer
+      uses: actions/upload-artifact@v4
+      with:
+        name: AI-Dubbing-Studio-Windows-Installer
+        path: frontend/dist-electron/*.exe
+        retention-days: 30
+        if-no-files-found: error
+
+    # 14. Загружаем также распакованную версию (для тестирования)
+    - name: Upload Windows Unpacked
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: AI-Dubbing-Studio-Windows-Unpacked
+        path: frontend/dist-electron/win-unpacked
+        retention-days: 7
+        if-no-files-found: warn

@@ -222,15 +222,26 @@ if getattr(sys, 'frozen', False):
 if __name__ in {"__main__", "__mp_main__"}:
     safe_print("--- ЗАПУСК AI DUBBING STUDIO ---")
     
+    # Проверяем и запускаем Ollama автоматически (если нужно)
+    try:
+        from core.ollama_manager import OllamaManager
+        ollama_manager = OllamaManager(progress_callback=safe_print)
+        # Автоматически запускаем Ollama, если он не запущен
+        ollama_manager.ensure_ollama_running(auto_start=True)
+    except Exception as e:
+        safe_print(f"⚠️ Не удалось проверить Ollama: {e}")
+        safe_print("💡 Убедитесь, что Ollama установлен и доступен")
+    
     # Строим интерфейс из файла ui.py
     build_interface()
     
     # Запускаем приложение
     # native=True означает, что откроется как отдельное окно (не в браузере)
     # reload=False важно для стабильности при сборке exe
+    # fullscreen=True запускает в полноэкранном режиме
     ui.run(
         title="AI Dubbing Studio",
         native=True,
         reload=False,
-        window_size=(900, 700)
+        fullscreen=True
     )

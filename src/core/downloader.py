@@ -1,5 +1,5 @@
 from pytubefix import YouTube
-from pytubefix.cli import on_progress
+# from pytubefix.cli import on_progress  <-- Убираем импорт, пишем свой
 import os
 import shutil
 import subprocess
@@ -126,9 +126,27 @@ def download_video(url, log_func, target_quality='1080p'):
         log_func(f"📂 Папка сохранения: {output_folder}")
         # --------------------------------------------
 
+        # Колбэк для прогресса
+        last_percent = 0
+        
+        def progress_function(stream, chunk, bytes_remaining):
+            nonlocal last_percent
+            total_size = stream.filesize
+            bytes_downloaded = total_size - bytes_remaining
+            percent = int((bytes_downloaded / total_size) * 100)
+            
+            # Выводим прогресс каждые 10% или если 100%
+            if percent >= last_percent + 10 or percent == 100:
+                last_percent = percent
+                # Формируем прогресс-бар
+                bar_length = 20
+                filled_length = int(bar_length * percent // 100)
+                bar = '█' * filled_length + '-' * (bar_length - filled_length)
+                log_func(f" ↳ |{bar}| {percent}%")
+
         # 1. Инициализация
         try:
-            yt = YouTube(url, on_progress_callback=on_progress)
+            yt = YouTube(url, on_progress_callback=progress_function)
         except Exception as e:
             log_func(f"❌ Ошибка доступа: {str(e)}")
             return None
