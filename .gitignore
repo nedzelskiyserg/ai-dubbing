@@ -85,4 +85,5 @@ $RECYCLE.BIN/
 # ==========================
 .vscode/
 .idea/
-*.swpvenv_tts/
+*.swp
+venv_tts/
