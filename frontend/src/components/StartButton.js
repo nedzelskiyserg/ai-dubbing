@@ -59,12 +59,17 @@ const StartButton = () => {
     setIsProcessing(true);
     setProgress(0);
     try {
-      // Проверяем доступность API сервера перед запуском
+      // Проверяем доступность API сервера перед запуском (с повторными попытками)
       try {
-        await healthCheck();
+        await healthCheck(5, 1000); // 5 попыток с интервалом 1 секунда
       } catch (healthError) {
         console.error('API server is not available:', healthError);
-        alert('Ошибка: API сервер не отвечает.\n\nПожалуйста, убедитесь, что приложение запущено корректно и перезапустите его при необходимости.');
+        alert('Ошибка: API сервер не отвечает.\n\n' +
+              'Возможные причины:\n' +
+              '1. API сервер еще запускается (подождите несколько секунд)\n' +
+              '2. Порт 5001 занят другим приложением\n' +
+              '3. Python backend не запустился корректно\n\n' +
+              'Попробуйте перезапустить приложение.');
         setIsProcessing(false);
         setProgress(0);
         return;

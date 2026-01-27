@@ -383,15 +383,30 @@ function startApiServer() {
   }
 
   apiServer.stdout.on('data', (data) => {
-    console.log(`API: ${data}`);
+    const output = data.toString();
+    console.log(`API: ${output}`);
+    
+    // Проверяем, запустился ли сервер (обычно Flask выводит "Running on")
+    if (output.includes('Running on') || output.includes('Serving Flask app') || output.includes('* Running on')) {
+      console.log('✅ API сервер запустился и слушает порт');
+    }
   });
 
   apiServer.stderr.on('data', (data) => {
-    console.error(`API Error: ${data}`);
+    const error = data.toString();
+    console.error(`API Error: ${error}`);
+    
+    // Не все ошибки критичны - Flask может выводить предупреждения в stderr
+    if (error.includes('ERROR') || error.includes('Traceback') || error.includes('Exception')) {
+      console.error('❌ Критическая ошибка API сервера:', error);
+    }
   });
 
   apiServer.on('close', (code) => {
     console.log(`API сервер завершился с кодом ${code}`);
+    if (code !== 0 && code !== null) {
+      console.error(`❌ API сервер завершился с ошибкой (код: ${code})`);
+    }
   });
 
   apiServer.on('error', (error) => {
@@ -429,6 +444,31 @@ function checkApiServer() {
   });
 }
 
+// Ожидание готовности API сервера с повторными попытками
+function waitForApiServer(maxAttempts = 30, delay = 1000) {
+  return new Promise((resolve, reject) => {
+    let attempts = 0;
+    
+    const check = async () => {
+      attempts++;
+      const isRunning = await checkApiServer();
+      
+      if (isRunning) {
+        console.log('✅ API сервер готов');
+        resolve(true);
+      } else if (attempts >= maxAttempts) {
+        console.error('❌ API сервер не запустился за отведенное время');
+        reject(new Error('API server did not start in time'));
+      } else {
+        // Продолжаем проверку
+        setTimeout(check, delay);
+      }
+    };
+    
+    check();
+  });
+}
+
 // Обработчики IPC для работы с буфером обмена
 ipcMain.handle('clipboard-read-text', () => {
   return clipboard.readText();
@@ -448,6 +488,15 @@ app.whenReady().then(async () => {
     // Запускаем API сервер только если он не запущен
     console.log('Запуск API сервера из Electron...');
     startApiServer();
+    
+    // Ждем, пока API сервер станет доступен (максимум 30 секунд)
+    try {
+      await waitForApiServer(30, 1000);
+      console.log('✅ API сервер успешно запущен и готов к работе');
+    } catch (error) {
+      console.error('❌ Не удалось дождаться запуска API сервера:', error);
+      // Продолжаем работу, но пользователь увидит ошибку при попытке использовать
+    }
   } else {
     console.log('API сервер уже запущен, пропускаем запуск из Electron');
   }

@@ -14,14 +14,24 @@ const api = axios.create({
   },
 });
 
-export const healthCheck = async () => {
-  try {
-    const response = await api.get('/health');
-    return response.data;
-  } catch (error) {
-    console.error('Health check failed:', error);
-    throw error;
+export const healthCheck = async (retries = 3, delay = 1000) => {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const response = await api.get('/health', { timeout: 2000 });
+      if (response.status === 200) {
+        return response.data;
+      }
+    } catch (error) {
+      // Если это последняя попытка, пробрасываем ошибку
+      if (i === retries - 1) {
+        console.error('Health check failed after all retries:', error);
+        throw error;
+      }
+      // Иначе ждем и пробуем снова
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
   }
+  throw new Error('Health check failed after all retries');
 };
 
 export const getLogs = async () => {
