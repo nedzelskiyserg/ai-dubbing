@@ -1,8 +1,8 @@
-name: Build AI Dubbing Studio
+name: Build AI Dubbing Studio (OLD - DISABLED)
 
 on:
-  push:
-    branches: [ "main" ]
+  # Отключен - используем build-electron.yml вместо этого
+  workflow_dispatch:
 
 jobs:
   build:

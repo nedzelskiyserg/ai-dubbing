@@ -18,6 +18,8 @@ function createWindow() {
     minWidth: 1200,
     minHeight: 700,
     backgroundColor: '#1A1A1A',
+    fullscreen: false, // Явно отключаем полноэкранный режим
+    fullscreenable: true, // Разрешаем переключение через F11
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -55,6 +57,10 @@ function createWindow() {
 
   // Показываем окно когда готово
   mainWindow.once('ready-to-show', () => {
+    // Убеждаемся, что окно не в полноэкранном режиме
+    if (mainWindow.isFullScreen()) {
+      mainWindow.setFullScreen(false);
+    }
     mainWindow.show();
     mainWindow.center(); // Центрируем окно
     mainWindow.focus(); // Фокусируемся на окне
@@ -62,6 +68,7 @@ function createWindow() {
 
   // Обработка закрытия окна - принудительно останавливаем все процессы
   mainWindow.on('close', async (event) => {
+    // НЕ предотвращаем закрытие - всегда разрешаем
     // Отправляем запрос на остановку процесса через API
     try {
       const http = require('http');
@@ -94,23 +101,32 @@ function createWindow() {
       req.write(postData);
       req.end();
       
-      // Даем немного времени на обработку запроса
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // Даем немного времени на обработку запроса (но не блокируем закрытие)
+      setTimeout(() => {
+        // Принудительно завершаем все процессы
+        if (apiServer) {
+          console.log('Принудительное завершение API сервера...');
+          apiServer.kill('SIGTERM');
+          // Если не завершился за 2 секунды, убиваем принудительно
+          setTimeout(() => {
+            if (apiServer && !apiServer.killed) {
+              console.log('Принудительное убийство API сервера...');
+              apiServer.kill('SIGKILL');
+            }
+          }, 2000);
+        }
+      }, 100);
     } catch (error) {
       console.log('Ошибка при остановке процесса:', error);
-    }
-    
-    // Принудительно завершаем все процессы
-    if (apiServer) {
-      console.log('Принудительное завершение API сервера...');
-      apiServer.kill('SIGTERM');
-      // Если не завершился за 2 секунды, убиваем принудительно
-      setTimeout(() => {
-        if (apiServer && !apiServer.killed) {
-          console.log('Принудительное убийство API сервера...');
-          apiServer.kill('SIGKILL');
-        }
-      }, 2000);
+      // Все равно завершаем процессы
+      if (apiServer) {
+        apiServer.kill('SIGTERM');
+        setTimeout(() => {
+          if (apiServer && !apiServer.killed) {
+            apiServer.kill('SIGKILL');
+          }
+        }, 2000);
+      }
     }
   });
 

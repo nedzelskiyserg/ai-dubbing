@@ -75,6 +75,7 @@
         "filter": ["**/*"]
       }
     ],
+    "extraFiles": [],
     "extraFiles": [
       {
         "from": "build/python-backend",
@@ -91,7 +92,14 @@
       ],
       "icon": "build/icon.ico",
       "artifactName": "${productName}-${version}-${arch}.${ext}",
-      "requestedExecutionLevel": "asInvoker"
+      "requestedExecutionLevel": "asInvoker",
+      "extraResources": [
+        {
+          "from": "build/python-backend",
+          "to": "python-backend",
+          "filter": ["**/*"]
+        }
+      ]
     },
     "nsis": {
       "oneClick": false,
