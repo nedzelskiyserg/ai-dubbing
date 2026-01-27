@@ -61,6 +61,12 @@ function createWindow() {
     if (mainWindow.isFullScreen()) {
       mainWindow.setFullScreen(false);
     }
+    
+    // Устанавливаем масштаб на 75% (уменьшение на 25%) для Windows
+    if (process.platform === 'win32') {
+      mainWindow.webContents.setZoomFactor(0.75);
+    }
+    
     mainWindow.show();
     mainWindow.center(); // Центрируем окно
     mainWindow.focus(); // Фокусируемся на окне

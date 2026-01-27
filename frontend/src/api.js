@@ -7,6 +7,11 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
+  timeout: 5000, // Таймаут 5 секунд
+  validateStatus: function (status) {
+    // Разрешаем любые статусы меньше 500, чтобы обрабатывать ошибки вручную
+    return status < 500;
+  },
 });
 
 export const healthCheck = async () => {

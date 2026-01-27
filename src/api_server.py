@@ -407,11 +407,33 @@ def process_youtube_sync(url, quality, options):
                     processing_state['progress'] = 0
                     return
                 
+                # Преобразуем target_lang для voice cloning (RUSSIAN -> ru)
+                lang_map = {
+                    'RUSSIAN': 'ru',
+                    'ENGLISH': 'en',
+                    'SPANISH': 'es',
+                    'FRENCH': 'fr',
+                    'GERMAN': 'de',
+                    'ITALIAN': 'it',
+                    'PORTUGUESE': 'pt',
+                    'POLISH': 'pl',
+                    'TURKISH': 'tr',
+                    'DUTCH': 'nl',
+                    'CZECH': 'cs',
+                    'ARABIC': 'ar',
+                    'CHINESE': 'zh-cn',
+                    'HUNGARIAN': 'hu',
+                    'KOREAN': 'ko',
+                    'JAPANESE': 'ja',
+                    'HINDI': 'hi'
+                }
+                target_lang_for_voice = lang_map.get(options.get('target_lang', 'ru').upper(), options.get('target_lang', 'ru').lower())
+                
                 try:
                     segments_with_audio = cloner.generate_dubbing(
                         segments,
                         speaker_samples,
-                        options.get('target_lang', 'ru')
+                        target_lang_for_voice
                     )
                 except InterruptedError:
                     add_log("⏹️ Обработка остановлена пользователем")
@@ -888,13 +910,25 @@ def process_file_sync(file_path, options):
                     processing_state['progress'] = 0
                     return
                 
-                # Преобразуем target_lang для voice cloning
+                # Преобразуем target_lang для voice cloning (RUSSIAN -> ru)
                 lang_map = {
                     'RUSSIAN': 'ru',
                     'ENGLISH': 'en',
                     'SPANISH': 'es',
                     'FRENCH': 'fr',
-                    'GERMAN': 'de'
+                    'GERMAN': 'de',
+                    'ITALIAN': 'it',
+                    'PORTUGUESE': 'pt',
+                    'POLISH': 'pl',
+                    'TURKISH': 'tr',
+                    'DUTCH': 'nl',
+                    'CZECH': 'cs',
+                    'ARABIC': 'ar',
+                    'CHINESE': 'zh-cn',
+                    'HUNGARIAN': 'hu',
+                    'KOREAN': 'ko',
+                    'JAPANESE': 'ja',
+                    'HINDI': 'hi'
                 }
                 target_lang_for_voice = lang_map.get(options.get('target_lang', 'ru').upper(), options.get('target_lang', 'ru').lower())
                 

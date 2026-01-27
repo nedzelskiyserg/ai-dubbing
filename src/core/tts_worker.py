@@ -62,10 +62,32 @@ def generate_tts(text: str, speaker_wav: str, output_path: str, language: str = 
         if segment_info:
             print(f"🎤 [{segment_info['index']}/{segment_info['total']}] Генерация аудио ({len(text)} символов)...", file=sys.stderr, flush=True)
         
+        # Нормализуем язык: преобразуем RUSSIAN -> ru и т.д.
+        lang_map = {
+            'RUSSIAN': 'ru',
+            'ENGLISH': 'en',
+            'SPANISH': 'es',
+            'FRENCH': 'fr',
+            'GERMAN': 'de',
+            'ITALIAN': 'it',
+            'PORTUGUESE': 'pt',
+            'POLISH': 'pl',
+            'TURKISH': 'tr',
+            'DUTCH': 'nl',
+            'CZECH': 'cs',
+            'ARABIC': 'ar',
+            'CHINESE': 'zh-cn',
+            'HUNGARIAN': 'hu',
+            'KOREAN': 'ko',
+            'JAPANESE': 'ja',
+            'HINDI': 'hi'
+        }
+        normalized_language = lang_map.get(language.upper(), language.lower())
+        
         _cached_tts.tts_to_file(
             text=text,
             speaker_wav=speaker_wav,
-            language=language,
+            language=normalized_language,
             file_path=output_path,
             split_sentences=False
         )

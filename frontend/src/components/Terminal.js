@@ -47,10 +47,15 @@ const Terminal = () => {
   }, [checkIfAtBottom]);
 
   useEffect(() => {
+    let retryCount = 0;
+    const maxRetries = 3;
+    
     // Polling для получения логов
     const interval = setInterval(async () => {
       try {
         const response = await getLogs();
+        retryCount = 0; // Сбрасываем счетчик при успехе
+        
         if (response && Array.isArray(response) && response.length > 0) {
           // Проверяем, находимся ли мы внизу перед обновлением
           const wasAtBottom = checkIfAtBottom();
@@ -69,14 +74,25 @@ const Terminal = () => {
           });
         }
       } catch (error) {
-        console.error('Failed to fetch logs:', error);
-        // При ошибке показываем сообщение об ошибке
-        setLogs(prev => {
-          if (prev.length === 0 || !prev.some(log => log.includes('Failed to fetch'))) {
-            return [...prev, `> Error: Failed to fetch logs from API`];
-          }
-          return prev;
-        });
+        // Не логируем ошибку в консоль, если это просто временная проблема подключения
+        const isConnectionError = error.code === 'ECONNREFUSED' || 
+                                  error.code === 'ERR_NETWORK' || 
+                                  error.message?.includes('Network Error') ||
+                                  !error.response;
+        
+        // Показываем ошибку только после нескольких неудачных попыток
+        retryCount++;
+        if (retryCount >= maxRetries && !isConnectionError) {
+          console.error('Failed to fetch logs after multiple attempts:', error);
+          // При ошибке показываем сообщение об ошибке только если это не проблема подключения
+          setLogs(prev => {
+            if (!prev.some(log => log.includes('Failed to fetch'))) {
+              return [...prev, `> Error: Failed to fetch logs from API`];
+            }
+            return prev;
+          });
+        }
+        // Если это ошибка подключения, просто молча игнорируем - API еще не запустился
       }
     }, 2000); // Обновляем каждые 2 секунды
 
@@ -153,7 +169,7 @@ const Terminal = () => {
           <div key={index} className="terminal-line">{log}</div>
         ))}
         <div className="terminal-cursor">
-          <span className="cursor-prompt">></span>
+          <span className="cursor-prompt">&gt;</span>
           <span className="cursor-blink">_</span>
         </div>
       </div>

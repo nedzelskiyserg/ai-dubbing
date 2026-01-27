@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import './Dropdown.css';
 
 const Dropdown = ({ 
@@ -12,14 +13,49 @@ const Dropdown = ({
   const [isOpen, setIsOpen] = useState(false);
   const [selectedValue, setSelectedValue] = useState(value);
   const dropdownRef = useRef(null);
+  const triggerRef = useRef(null);
+  const menuRef = useRef(null);
+  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0, width: 0 });
 
   useEffect(() => {
     setSelectedValue(value);
   }, [value]);
 
+  // Вычисляем позицию меню относительно триггера
+  const updateMenuPosition = () => {
+    if (triggerRef.current) {
+      const triggerRect = triggerRef.current.getBoundingClientRect();
+      setMenuPosition({
+        top: triggerRect.bottom + 4 + window.scrollY,
+        left: triggerRect.left + window.scrollX,
+        width: triggerRect.width
+      });
+    }
+  };
+
+  useEffect(() => {
+    if (isOpen) {
+      updateMenuPosition();
+      
+      // Обновляем позицию при скролле и ресайзе
+      window.addEventListener('scroll', updateMenuPosition, true);
+      window.addEventListener('resize', updateMenuPosition);
+      
+      return () => {
+        window.removeEventListener('scroll', updateMenuPosition, true);
+        window.removeEventListener('resize', updateMenuPosition);
+      };
+    }
+  }, [isOpen]);
+
   useEffect(() => {
     const handleClickOutside = (event) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+      if (
+        dropdownRef.current && 
+        !dropdownRef.current.contains(event.target) &&
+        menuRef.current &&
+        !menuRef.current.contains(event.target)
+      ) {
         setIsOpen(false);
       }
     };
@@ -110,28 +146,38 @@ const Dropdown = ({
   };
 
   return (
-    <div 
-      className={`dropdown-wrapper ${className} ${isOpen ? 'open' : ''} ${disabled ? 'disabled' : ''}`}
-      ref={dropdownRef}
-      onWheel={handleWrapperWheel}
-      onTouchMove={(e) => {
-        // Блокируем touch скролл когда dropdown открыт
-        if (isOpen) {
-          e.stopPropagation();
-          e.preventDefault();
-        }
-      }}
-    >
+    <>
       <div 
-        className="dropdown-trigger"
-        onClick={() => !disabled && setIsOpen(!isOpen)}
+        className={`dropdown-wrapper ${className} ${isOpen ? 'open' : ''} ${disabled ? 'disabled' : ''}`}
+        ref={dropdownRef}
+        onWheel={handleWrapperWheel}
+        onTouchMove={(e) => {
+          // Блокируем touch скролл когда dropdown открыт
+          if (isOpen) {
+            e.stopPropagation();
+            e.preventDefault();
+          }
+        }}
       >
-        <span className="dropdown-value">{displayText}</span>
-        <span className="dropdown-arrow">▼</span>
-      </div>
-      {isOpen && (
         <div 
+          ref={triggerRef}
+          className="dropdown-trigger"
+          onClick={() => !disabled && setIsOpen(!isOpen)}
+        >
+          <span className="dropdown-value">{displayText}</span>
+          <span className="dropdown-arrow">▼</span>
+        </div>
+      </div>
+      {isOpen && createPortal(
+        <div 
+          ref={menuRef}
           className="dropdown-menu"
+          style={{
+            position: 'absolute',
+            top: `${menuPosition.top}px`,
+            left: `${menuPosition.left}px`,
+            width: `${menuPosition.width}px`
+          }}
           onWheel={handleMenuWheel}
           onTouchMove={(e) => {
             // Блокируем touch скролл страницы
@@ -147,9 +193,10 @@ const Dropdown = ({
               {option.label}
             </div>
           ))}
-        </div>
+        </div>,
+        document.body
       )}
-    </div>
+    </>
   );
 };
 

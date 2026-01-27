@@ -383,6 +383,28 @@ class VoiceCloner:
             self._log("⚠️ Нет сегментов для генерации дубляжа")
             return segments
         
+        # Нормализуем язык: преобразуем RUSSIAN -> ru и т.д.
+        lang_map = {
+            'RUSSIAN': 'ru',
+            'ENGLISH': 'en',
+            'SPANISH': 'es',
+            'FRENCH': 'fr',
+            'GERMAN': 'de',
+            'ITALIAN': 'it',
+            'PORTUGUESE': 'pt',
+            'POLISH': 'pl',
+            'TURKISH': 'tr',
+            'DUTCH': 'nl',
+            'CZECH': 'cs',
+            'ARABIC': 'ar',
+            'CHINESE': 'zh-cn',
+            'HUNGARIAN': 'hu',
+            'KOREAN': 'ko',
+            'JAPANESE': 'ja',
+            'HINDI': 'hi'
+        }
+        target_lang = lang_map.get(target_lang.upper(), target_lang.lower())
+        
         # Загружаем модель (ленивая загрузка)
         self._load_model()
         

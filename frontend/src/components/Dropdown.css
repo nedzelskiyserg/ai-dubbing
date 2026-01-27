@@ -64,15 +64,13 @@
 }
 
 .dropdown-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  right: 0;
+  position: fixed;
   background: #1A1A1A;
   border: 2px solid #2A2A2A;
   border-radius: 0;
-  z-index: 1000;
+  z-index: 10000;
   overflow-y: auto;
+  max-height: 300px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
 }
 
