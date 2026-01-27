@@ -71,58 +71,173 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    # 8. Скачиваем FFmpeg для Windows
+    # 8. Скачиваем FFmpeg для Windows (ОБЯЗАТЕЛЬНО!)
     - name: Download FFmpeg
       shell: pwsh
       run: |
-        New-Item -ItemType Directory -Force -Path ffmpeg
-        Write-Host "Скачивание FFmpeg..."
-        Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile "ffmpeg.zip"
-        Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg_temp -Force
-        # Копируем ffmpeg.exe из распакованной папки
-        $ffmpegPath = Get-ChildItem -Path ffmpeg_temp -Recurse -Filter ffmpeg.exe | Select-Object -First 1
-        Copy-Item $ffmpegPath.FullName -Destination ffmpeg\ffmpeg.exe
-        # Также копируем необходимые DLL файлы
-        $dllFiles = Get-ChildItem -Path $ffmpegPath.DirectoryName -Filter *.dll
-        foreach ($dll in $dllFiles) {
-          Copy-Item $dll.FullName -Destination ffmpeg\
+        Write-Host "📥 Скачивание FFmpeg (обязательный компонент)..."
+        New-Item -ItemType Directory -Force -Path ffmpeg | Out-Null
+        
+        try {
+          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile "ffmpeg.zip" -TimeoutSec 300
+          Write-Host "✅ FFmpeg скачан"
+        } catch {
+          Write-Host "❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось скачать FFmpeg"
+          Write-Host "Ошибка: $_"
+          exit 1
         }
-        Write-Host "✅ FFmpeg установлен"
+        
+        try {
+          Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg_temp -Force
+          # Копируем ffmpeg.exe из распакованной папки
+          $ffmpegPath = Get-ChildItem -Path ffmpeg_temp -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          
+          if (-not $ffmpegPath) {
+            Write-Host "❌ КРИТИЧЕСКАЯ ОШИБКА: ffmpeg.exe не найден в архиве"
+            exit 1
+          }
+          
+          Copy-Item $ffmpegPath.FullName -Destination ffmpeg\ffmpeg.exe
+          # Также копируем необходимые DLL файлы
+          $dllFiles = Get-ChildItem -Path $ffmpegPath.DirectoryName -Filter *.dll
+          foreach ($dll in $dllFiles) {
+            Copy-Item $dll.FullName -Destination ffmpeg\
+          }
+          Write-Host "✅ FFmpeg установлен и готов к использованию"
+        } catch {
+          Write-Host "❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось распаковать FFmpeg"
+          Write-Host "Ошибка: $_"
+          exit 1
+        }
+        
+        # Финальная проверка
+        if (-not (Test-Path "ffmpeg\ffmpeg.exe")) {
+          Write-Host "❌ КРИТИЧЕСКАЯ ОШИБКА: ffmpeg.exe не найден после установки"
+          exit 1
+        }
+        Write-Host "✅ FFmpeg успешно установлен и проверен"
 
-    # 9. Копируем FFmpeg в build директорию для включения в Electron
+    # 9. Копируем FFmpeg в build директорию (ОБЯЗАТЕЛЬНО!)
     - name: Copy FFmpeg to build directory
       shell: pwsh
       run: |
-        if (Test-Path "ffmpeg\ffmpeg.exe") {
-          New-Item -ItemType Directory -Force -Path frontend/build/ffmpeg | Out-Null
-          Copy-Item -Path ffmpeg\* -Destination frontend/build/ffmpeg\ -Recurse -Force
-          Write-Host "✅ FFmpeg скопирован в build директорию"
-        } else {
-          New-Item -ItemType Directory -Force -Path frontend/build/ffmpeg | Out-Null
-          Write-Host "⚠️ FFmpeg не найден, создана пустая директория"
+        if (-not (Test-Path "ffmpeg\ffmpeg.exe")) {
+          Write-Host "❌ КРИТИЧЕСКАЯ ОШИБКА: ffmpeg.exe не найден!"
+          Write-Host "FFmpeg обязателен для работы приложения"
+          exit 1
         }
+        
+        Write-Host "📋 Копирование FFmpeg в build директорию..."
+        New-Item -ItemType Directory -Force -Path frontend/build/ffmpeg | Out-Null
+        Copy-Item -Path ffmpeg\* -Destination frontend/build/ffmpeg\ -Recurse -Force
+        
+        # Проверяем, что файлы скопированы
+        if (-not (Test-Path "frontend\build\ffmpeg\ffmpeg.exe")) {
+          Write-Host "❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось скопировать FFmpeg"
+          exit 1
+        }
+        
+        Write-Host "✅ FFmpeg успешно скопирован в build директорию"
 
-    # 10. Упаковываем Python backend с PyInstaller
+    # 10. Упаковываем Python backend с PyInstaller (ОБЯЗАТЕЛЬНО!)
     - name: Package Python backend
       shell: pwsh
-      continue-on-error: true
       run: |
-        .\build-python-backend.ps1
-        if (-not (Test-Path "frontend\build\python-backend")) {
-          New-Item -ItemType Directory -Force -Path frontend/build/python-backend | Out-Null
-          Write-Host "⚠️ Python backend не собран, создана пустая директория"
+        Write-Host "🔨 Начинаем сборку Python backend (обязательный компонент)..."
+        
+        # Проверяем наличие скрипта сборки
+        if (-not (Test-Path "build-python-backend.ps1")) {
+          Write-Host "❌ КРИТИЧЕСКАЯ ОШИБКА: Скрипт build-python-backend.ps1 не найден!"
+          exit 1
         }
+        
+        # Запускаем сборку
+        $buildResult = & .\build-python-backend.ps1
+        $buildExitCode = $LASTEXITCODE
+        
+        if ($buildExitCode -ne 0) {
+          Write-Host "❌ КРИТИЧЕСКАЯ ОШИБКА: Сборка Python backend завершилась с ошибкой (код: $buildExitCode)"
+          Write-Host "Python backend обязателен для работы приложения"
+          exit 1
+        }
+        
+        # Проверяем результат сборки
+        $backendExe = "frontend\build\python-backend\api-server\api-server.exe"
+        if (-not (Test-Path $backendExe)) {
+          Write-Host "❌ КРИТИЧЕСКАЯ ОШИБКА: Python backend не собран!"
+          Write-Host "Ожидаемый файл не найден: $backendExe"
+          Write-Host "Python backend обязателен для работы приложения"
+          exit 1
+        }
+        
+        # Проверяем размер файла (должен быть больше 0)
+        $fileSize = (Get-Item $backendExe).Length
+        if ($fileSize -eq 0) {
+          Write-Host "❌ КРИТИЧЕСКАЯ ОШИБКА: Python backend собран, но файл пустой!"
+          exit 1
+        }
+        
+        Write-Host "✅ Python backend успешно собран (размер: $([math]::Round($fileSize/1MB, 2)) MB)"
+
+    # 11. Финальная проверка обязательных компонентов перед сборкой Electron
+    - name: Verify required components
+      shell: pwsh
+      run: |
+        Write-Host "🔍 Финальная проверка обязательных компонентов..."
+        
+        $errors = @()
+        
+        # Проверяем electron/main.js
+        if (-not (Test-Path "electron\main.js")) {
+          $errors += "❌ electron/main.js не найден!"
+        } else {
+          Write-Host "✅ electron/main.js найден"
+        }
+        
+        # Проверяем Python backend
+        $backendExe = "build\python-backend\api-server\api-server.exe"
+        if (-not (Test-Path $backendExe)) {
+          $errors += "❌ Python backend не собран: $backendExe"
+        } else {
+          $size = (Get-Item $backendExe).Length
+          Write-Host "✅ Python backend найден (размер: $([math]::Round($size/1MB, 2)) MB)"
+        }
+        
+        # Проверяем FFmpeg
+        $ffmpegExe = "build\ffmpeg\ffmpeg.exe"
+        if (-not (Test-Path $ffmpegExe)) {
+          $errors += "❌ FFmpeg не найден: $ffmpegExe"
+        } else {
+          Write-Host "✅ FFmpeg найден"
+        }
+        
+        # Проверяем React build
+        if (-not (Test-Path "build\index.html")) {
+          $errors += "❌ React build не найден: build/index.html"
+        } else {
+          Write-Host "✅ React build найден"
+        }
+        
+        # Если есть ошибки - завершаем с ошибкой
+        if ($errors.Count -gt 0) {
+          Write-Host ""
+          Write-Host "❌ КРИТИЧЕСКИЕ ОШИБКИ:"
+          foreach ($error in $errors) {
+            Write-Host "  $error"
+          }
+          Write-Host ""
+          Write-Host "Сборка Electron приложения невозможна без всех обязательных компонентов!"
+          exit 1
+        }
+        
+        Write-Host ""
+        Write-Host "✅ Все обязательные компоненты проверены и готовы к сборке"
 
     # 12. Собираем Electron приложение
     - name: Build Electron app
       working-directory: ./frontend
       run: |
-        # Убеждаемся, что electron/main.js существует
-        if (-not (Test-Path "electron\main.js")) {
-          Write-Host "❌ Ошибка: electron/main.js не найден!"
-          exit 1
-        }
-        Write-Host "✅ electron/main.js найден"
+        Write-Host "🔨 Начинаем сборку Electron приложения..."
         npm run dist:win
       env:
         ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder-cache

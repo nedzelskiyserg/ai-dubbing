@@ -57,7 +57,8 @@
       "!**/{appveyor.yml,.travis.yml,circle.yml}",
       "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}",
       "!**/.env",
-      "!**/.env.*"
+      "!**/.env.*",
+      "!**/.gitkeep"
     ],
     "extraResources": [
       {
@@ -68,6 +69,16 @@
       {
         "from": "../requirements.txt",
         "to": "requirements.txt"
+      },
+      {
+        "from": "build/python-backend",
+        "to": "python-backend",
+        "filter": ["**/*", "!.gitkeep"]
+      },
+      {
+        "from": "build/ffmpeg",
+        "to": "ffmpeg",
+        "filter": ["**/*", "!.gitkeep"]
       }
     ],
     "win": {
@@ -80,27 +91,14 @@
       "icon": "build/icon.ico",
       "artifactName": "${productName}-${version}-${arch}.${ext}",
       "requestedExecutionLevel": "asInvoker",
-      "extraResources": [
-        {
-          "from": "build/python-backend",
-          "to": "python-backend",
-          "filter": ["**/*"]
-        },
-        {
-          "from": "build/ffmpeg",
-          "to": "ffmpeg",
-          "filter": ["**/*"]
-        }
-      ],
-      "extraFiles": []
+      "extraResources": []
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "AI Dubbing Studio",
-      "include": "build/installer.nsh"
+      "shortcutName": "AI Dubbing Studio"
     },
     "compression": "maximum",
     "publish": null

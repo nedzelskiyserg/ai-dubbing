@@ -390,6 +390,19 @@ function startApiServer() {
 
   apiServer.on('error', (error) => {
     console.error(`Ошибка запуска API сервера: ${error}`);
+    
+    // Показываем понятное сообщение пользователю
+    if (app.isPackaged) {
+      const { dialog } = require('electron');
+      dialog.showErrorBox(
+        'Ошибка запуска',
+        `Не удалось запустить Python backend.\n\n` +
+        `Возможные причины:\n` +
+        `1. Python не установлен на системе\n` +
+        `2. Python backend не был собран при упаковке\n\n` +
+        `Пожалуйста, установите Python 3.10+ и убедитесь, что все зависимости установлены.`
+      );
+    }
   });
 }
 
