@@ -274,16 +274,26 @@ jobs:
         ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder-cache
         CI: false
 
-    # 13. Загружаем артефакты
-    - name: Upload Windows Installer
+    # 13. Загружаем Portable версию (один EXE файл, не требует установки)
+    - name: Upload Windows Portable (Single EXE)
       uses: actions/upload-artifact@v4
       with:
-        name: AI-Dubbing-Studio-Windows-Installer
-        path: frontend/dist-electron/*.exe
+        name: AI-Dubbing-Studio-Windows-Portable
+        path: frontend/dist-electron/*Portable*.exe
         retention-days: 30
         if-no-files-found: error
 
-    # 14. Загружаем также распакованную версию (для тестирования)
+    # 14. Загружаем установщик (NSIS) - опционально
+    - name: Upload Windows Installer
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: AI-Dubbing-Studio-Windows-Installer
+        path: frontend/dist-electron/*Setup*.exe
+        retention-days: 30
+        if-no-files-found: warn
+
+    # 15. Загружаем также распакованную версию (для тестирования)
     - name: Upload Windows Unpacked
       uses: actions/upload-artifact@v4
       if: always()
