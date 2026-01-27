@@ -44,7 +44,7 @@ jobs:
     # 5. Устанавливаем зависимости Node.js
     - name: Install Node.js dependencies
       working-directory: ./frontend
-      run: npm ci
+      run: npm install
 
     # 6. Собираем React приложение
     - name: Build React app
