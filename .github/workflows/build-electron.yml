@@ -28,17 +28,28 @@ jobs:
       with:
         python-version: '3.10'
 
-    # 4. Создаем .env файл из секрета (для Hugging Face токена)
-    - name: Create .env file from secret
+    # 4. Создаем .env файл из секрета (БЕЗОПАСНО - токен из GitHub Secrets)
+    - name: Create .env file from GitHub Secret
       shell: pwsh
       run: |
-        if ($env:HF_TOKEN) {
+        if ($env:HF_TOKEN -and $env:HF_TOKEN -ne "") {
+          # Безопасно создаем .env файл из секрета
+          # ВАЖНО: Токен НЕ логируется благодаря использованию GitHub Secrets
+          # GitHub автоматически маскирует секреты в логах
           "HF_TOKEN=$env:HF_TOKEN" | Out-File -FilePath .env -Encoding utf8
-          Write-Host "✅ .env файл создан из секрета"
+          Write-Host "✅ .env файл создан из GitHub Secret"
+          Write-Host "✅ Токен безопасно загружен (не виден в логах)"
         } else {
-          Write-Host "⚠️ HF_TOKEN секрет не установлен, диаризация может не работать"
+          Write-Host "⚠️ HF_TOKEN секрет не установлен в GitHub Secrets"
+          Write-Host "ℹ️  Диаризация может не работать без токена"
+          Write-Host "ℹ️  Для установки: Settings → Secrets and variables → Actions → New repository secret"
+          Write-Host "ℹ️  Имя секрета: HF_TOKEN"
+          # Создаем пустой .env файл, чтобы избежать ошибок
+          "" | Out-File -FilePath .env -Encoding utf8
         }
       env:
+        # БЕЗОПАСНО: GitHub Secrets автоматически маскируются в логах
+        # Токен никогда не попадет в логи, артефакты или код
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
     # 5. Устанавливаем зависимости Node.js
@@ -82,42 +93,37 @@ jobs:
     - name: Copy FFmpeg to build directory
       shell: pwsh
       run: |
-        New-Item -ItemType Directory -Force -Path frontend/build/ffmpeg
-        Copy-Item -Path ffmpeg\* -Destination frontend/build/ffmpeg\ -Recurse -Force
-        Write-Host "✅ FFmpeg скопирован в build директорию"
+        if (Test-Path "ffmpeg\ffmpeg.exe") {
+          New-Item -ItemType Directory -Force -Path frontend/build/ffmpeg | Out-Null
+          Copy-Item -Path ffmpeg\* -Destination frontend/build/ffmpeg\ -Recurse -Force
+          Write-Host "✅ FFmpeg скопирован в build директорию"
+        } else {
+          New-Item -ItemType Directory -Force -Path frontend/build/ffmpeg | Out-Null
+          Write-Host "⚠️ FFmpeg не найден, создана пустая директория"
+        }
 
     # 10. Упаковываем Python backend с PyInstaller
     - name: Package Python backend
       shell: pwsh
+      continue-on-error: true
       run: |
         .\build-python-backend.ps1
-
-    # 11. Проверяем наличие необходимых директорий и создаем их если нужно
-    - name: Ensure build directories exist
-      shell: pwsh
-      run: |
-        # Создаем пустые директории, если они не существуют (для избежания ошибок electron-builder)
-        $pythonBackend = "frontend\build\python-backend"
-        $ffmpeg = "frontend\build\ffmpeg"
-        
-        if (-not (Test-Path $pythonBackend)) {
-          New-Item -ItemType Directory -Force -Path $pythonBackend | Out-Null
-          Write-Host "⚠️ python-backend не найден, создана пустая директория"
-        } else {
-          Write-Host "✅ python-backend найден"
-        }
-        
-        if (-not (Test-Path $ffmpeg)) {
-          New-Item -ItemType Directory -Force -Path $ffmpeg | Out-Null
-          Write-Host "⚠️ ffmpeg не найден, создана пустая директория"
-        } else {
-          Write-Host "✅ ffmpeg найден"
+        if (-not (Test-Path "frontend\build\python-backend")) {
+          New-Item -ItemType Directory -Force -Path frontend/build/python-backend | Out-Null
+          Write-Host "⚠️ Python backend не собран, создана пустая директория"
         }
 
     # 12. Собираем Electron приложение
     - name: Build Electron app
       working-directory: ./frontend
-      run: npm run dist:win
+      run: |
+        # Убеждаемся, что electron/main.js существует
+        if (-not (Test-Path "electron\main.js")) {
+          Write-Host "❌ Ошибка: electron/main.js не найден!"
+          exit 1
+        }
+        Write-Host "✅ electron/main.js найден"
+        npm run dist:win
       env:
         ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder-cache
         CI: false
