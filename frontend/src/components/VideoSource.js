@@ -9,7 +9,6 @@ const VideoSource = () => {
   const [fileInfo, setFileInfo] = useState(null);
   const [thumbnailUrl, setThumbnailUrl] = useState(null);
   const fileInputRef = useRef(null);
-  const videoRef = useRef(null);
 
   // Получаем информацию о файле
   useEffect(() => {
@@ -86,7 +85,7 @@ const VideoSource = () => {
     } else {
       setFileInfo(null);
     }
-  }, [uploadedFile]);
+  }, [uploadedFile, thumbnailUrl]);
 
   const handleDragOver = (e) => {
     e.preventDefault();

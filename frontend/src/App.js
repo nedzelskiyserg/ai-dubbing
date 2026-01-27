@@ -7,12 +7,10 @@ import VideoSource from './components/VideoSource';
 import AdditionalOptions from './components/AdditionalOptions';
 import StartButton from './components/StartButton';
 import Terminal from './components/Terminal';
-import { stopProcessing } from './api';
 
 const AppContent = () => {
   const { activePage } = useContext(AppContext);
   const contentWrapperRef = useRef(null);
-  const scrollTimeoutRef = useRef(null);
 
   useEffect(() => {
     const contentWrapper = contentWrapperRef.current;
