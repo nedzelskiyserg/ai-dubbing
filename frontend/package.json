@@ -39,6 +39,7 @@
     "files": [
       "build/**/*",
       "electron/**/*",
+      "!electron/**/*.map",
       "node_modules/**/*",
       "../src/**/*",
       "../requirements.txt",
@@ -56,11 +57,6 @@
     ],
     "extraResources": [
       {
-        "from": "build/python-backend",
-        "to": "python-backend",
-        "filter": ["**/*"]
-      },
-      {
         "from": "../src",
         "to": "src",
         "filter": ["**/*"]
@@ -68,6 +64,11 @@
       {
         "from": "../requirements.txt",
         "to": "requirements.txt"
+      },
+      {
+        "from": "build/python-backend",
+        "to": "python-backend",
+        "filter": ["**/*"]
       },
       {
         "from": "build/ffmpeg",

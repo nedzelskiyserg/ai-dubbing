@@ -92,6 +92,28 @@ jobs:
       run: |
         .\build-python-backend.ps1
 
+    # 11. Проверяем наличие необходимых директорий и создаем их если нужно
+    - name: Ensure build directories exist
+      shell: pwsh
+      run: |
+        # Создаем пустые директории, если они не существуют (для избежания ошибок electron-builder)
+        $pythonBackend = "frontend\build\python-backend"
+        $ffmpeg = "frontend\build\ffmpeg"
+        
+        if (-not (Test-Path $pythonBackend)) {
+          New-Item -ItemType Directory -Force -Path $pythonBackend | Out-Null
+          Write-Host "⚠️ python-backend не найден, создана пустая директория"
+        } else {
+          Write-Host "✅ python-backend найден"
+        }
+        
+        if (-not (Test-Path $ffmpeg)) {
+          New-Item -ItemType Directory -Force -Path $ffmpeg | Out-Null
+          Write-Host "⚠️ ffmpeg не найден, создана пустая директория"
+        } else {
+          Write-Host "✅ ffmpeg найден"
+        }
+
     # 12. Собираем Electron приложение
     - name: Build Electron app
       working-directory: ./frontend
