@@ -99,15 +99,21 @@ Write-Host "🔍 Проверка результата сборки..."
 $backendDir = "python-backend-dist\api-server"
 $backendExe = "$backendDir\api-server.exe"
 
+Write-Host "Проверяем директорию: $backendDir"
 if (-not (Test-Path $backendDir)) {
     Write-Host "❌ КРИТИЧЕСКАЯ ОШИБКА: Директория сборки не найдена: $backendDir"
+    Write-Host "Содержимое python-backend-dist:"
+    if (Test-Path "python-backend-dist") {
+        Get-ChildItem "python-backend-dist" | ForEach-Object { Write-Host "  - $($_.Name)" }
+    }
     exit 1
 }
 
+Write-Host "Проверяем файл: $backendExe"
 if (-not (Test-Path $backendExe)) {
     Write-Host "❌ КРИТИЧЕСКАЯ ОШИБКА: Исполняемый файл не найден: $backendExe"
-    Write-Host "Содержимое директории:"
-    Get-ChildItem $backendDir | ForEach-Object { Write-Host "  - $($_.Name)" }
+    Write-Host "Содержимое директории $backendDir :"
+    Get-ChildItem $backendDir | Select-Object -First 20 | ForEach-Object { Write-Host "  - $($_.Name) ($($_.PSIsContainer ? 'DIR' : 'FILE'))" }
     exit 1
 }
 
@@ -123,16 +129,44 @@ Write-Host "✅ Исполняемый файл найден (размер: $([m
 # Копируем упакованный backend в нужное место
 Write-Host "📋 Копируем упакованный backend..."
 try {
-    New-Item -ItemType Directory -Force -Path "frontend\build\python-backend" | Out-Null
-    Copy-Item -Path $backendDir -Destination "frontend\build\python-backend" -Recurse -Force
+    $targetBaseDir = "frontend\build\python-backend"
     
-    # Финальная проверка
-    if (-not (Test-Path "frontend\build\python-backend\api-server\api-server.exe")) {
+    Write-Host "Создаем базовую директорию: $targetBaseDir"
+    New-Item -ItemType Directory -Force -Path $targetBaseDir | Out-Null
+    
+    # Удаляем старую директорию, если существует
+    if (Test-Path $targetBaseDir) {
+        Write-Host "Очищаем старую директорию: $targetBaseDir"
+        Remove-Item -Path "$targetBaseDir\*" -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    
+    Write-Host "Копируем из: $backendDir"
+    Write-Host "Копируем в: $targetBaseDir"
+    
+    # Копируем всю директорию api-server в правильное место
+    # Результат: frontend/build/python-backend/api-server/api-server.exe
+    Copy-Item -Path $backendDir -Destination $targetBaseDir -Recurse -Force
+    
+    # Финальная проверка - файл должен быть в targetBaseDir/api-server/api-server.exe
+    $finalExe = "$targetBaseDir\api-server\api-server.exe"
+    Write-Host "Проверяем наличие: $finalExe"
+    
+    if (-not (Test-Path $finalExe)) {
         Write-Host "❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось скопировать Python backend"
+        Write-Host "Ожидаемый файл: $finalExe"
+        Write-Host "Содержимое $targetBaseDir :"
+        if (Test-Path $targetBaseDir) {
+            Get-ChildItem $targetBaseDir -Recurse | Select-Object -First 30 | ForEach-Object { 
+                $type = if ($_.PSIsContainer) { "DIR" } else { "FILE" }
+                Write-Host "  [$type] $($_.FullName)"
+            }
+        }
         exit 1
     }
     
-    Write-Host "✅ Python backend успешно упакован и скопирован"
+    $finalSize = (Get-Item $finalExe).Length
+    Write-Host "✅ Python backend успешно упакован и скопирован (размер: $([math]::Round($finalSize/1MB, 2)) MB)"
+    Write-Host "Финальный путь: $finalExe"
 } catch {
     Write-Host "❌ КРИТИЧЕСКАЯ ОШИБКА: Ошибка при копировании backend"
     Write-Host "Ошибка: $_"

@@ -182,40 +182,71 @@ jobs:
     # 11. Финальная проверка обязательных компонентов перед сборкой Electron
     - name: Verify required components
       shell: pwsh
+      working-directory: ./frontend
       run: |
         Write-Host "🔍 Финальная проверка обязательных компонентов..."
+        Write-Host "Текущая директория: $(Get-Location)"
         
         $errorList = @()
         
-        # Проверяем electron/main.js
-        if (-not (Test-Path "electron\main.js")) {
-          $errorList += "❌ electron/main.js не найден!"
+        # Проверяем electron/main.js (относительно frontend/)
+        $electronMain = "electron\main.js"
+        if (-not (Test-Path $electronMain)) {
+          $errorList += "❌ electron/main.js не найден: $electronMain"
+          Write-Host "Содержимое текущей директории:"
+          Get-ChildItem | Select-Object -First 10 | ForEach-Object { Write-Host "  $($_.Name)" }
         } else {
-          Write-Host "✅ electron/main.js найден"
+          Write-Host "✅ electron/main.js найден: $electronMain"
         }
         
-        # Проверяем Python backend
-        $backendExe = "build\python-backend\api-server\api-server.exe"
-        if (-not (Test-Path $backendExe)) {
-          $errorList += "❌ Python backend не собран: $backendExe"
+        # Проверяем Python backend (относительно frontend/build/)
+        # Проверяем оба возможных пути
+        $backendExe1 = "build\python-backend\api-server.exe"
+        $backendExe2 = "build\python-backend\api-server\api-server.exe"
+        
+        $backendExe = $null
+        if (Test-Path $backendExe1) {
+          $backendExe = $backendExe1
+        } elseif (Test-Path $backendExe2) {
+          $backendExe = $backendExe2
+        }
+        
+        if (-not $backendExe) {
+          $errorList += "❌ Python backend не собран: не найден ни $backendExe1, ни $backendExe2"
+          # Показываем что есть в директории
+          $backendDir = "build\python-backend"
+          if (Test-Path $backendDir) {
+            Write-Host "Содержимое $backendDir :"
+            Get-ChildItem $backendDir -Recurse | Select-Object -First 30 | ForEach-Object { 
+              $type = if ($_.PSIsContainer) { "DIR" } else { "FILE" }
+              Write-Host "  [$type] $($_.FullName)"
+            }
+          } else {
+            Write-Host "Директория $backendDir не существует"
+            Write-Host "Содержимое build/:"
+            if (Test-Path "build") {
+              Get-ChildItem "build" | Select-Object -First 10 | ForEach-Object { Write-Host "  $($_.Name)" }
+            }
+          }
         } else {
           $size = (Get-Item $backendExe).Length
-          Write-Host "✅ Python backend найден (размер: $([math]::Round($size/1MB, 2)) MB)"
+          Write-Host "✅ Python backend найден (размер: $([math]::Round($size/1MB, 2)) MB): $backendExe"
         }
         
-        # Проверяем FFmpeg
+        # Проверяем FFmpeg (относительно frontend/build/)
         $ffmpegExe = "build\ffmpeg\ffmpeg.exe"
         if (-not (Test-Path $ffmpegExe)) {
           $errorList += "❌ FFmpeg не найден: $ffmpegExe"
         } else {
-          Write-Host "✅ FFmpeg найден"
+          Write-Host "✅ FFmpeg найден: $ffmpegExe"
         }
         
-        # Проверяем React build
-        if (-not (Test-Path "build\index.html")) {
-          $errorList += "❌ React build не найден: build/index.html"
+        # Проверяем React build (относительно frontend/build/)
+        $reactBuild = "build\index.html"
+        if (-not (Test-Path $reactBuild)) {
+          $errorList += "❌ React build не найден: $reactBuild"
         } else {
-          Write-Host "✅ React build найден"
+          Write-Host "✅ React build найден: $reactBuild"
         }
         
         # Если есть ошибки - завершаем с ошибкой
