@@ -1,82 +1,88 @@
-# Python
+# ==========================
+# 🐍 PYTHON & VENV
+# ==========================
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
-.Python
+.venv/
 venv/
-venv_*/
 env/
-ENV/
-.venv
-*.egg-info/
-dist/
+.env
+
+# ==========================
+# 🖥️ FRONTEND (Node/React)
+# ==========================
+node_modules/
 build/
-*.egg
-
-# Electron
-frontend/dist-electron/
-frontend/build/
-frontend/node_modules/
-frontend/.pnp
-frontend/.pnp.js
-
-# Python backend build
-python-backend-dist/
-venv_build/
-
-# FFmpeg
-ffmpeg/
-ffmpeg.zip
-ffmpeg_temp/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
+dist/
+.npm/
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
 
-# Environment
-.env
-.env.local
+# ==========================
+# 🏗️ ELECTRON / TAURI BUILDS
+# ==========================
+# Папки, куда собирается приложение
+out/
+release/
+src-tauri/target/
 
-# Testing
-.coverage
-.pytest_cache/
-
-# PyInstaller
-*.spec
-
-# Модели Whisper (слишком большие для git)
+# ==========================
+# 🤖 AI MODELS (Критично!)
+# ==========================
+# Нейросети весят гигабайты. Не пушим их в гит!
+*.pth
+*.pt
+*.bin
+*.onnx
+*.tflite
+# Папки кэша моделей (если они создаются локально)
 models/
-models/**
-venv_tts/
+tts_models/
+deepfilter_models/
 
-# Загрузки и временные файлы (ВАЖНО!)
+# ==========================
+# 🎬 MEDIA & DATA (Твой проект)
+# ==========================
+# Исходники, скачанные видео
 downloads/
-downloads/**
+tests/downloads/
+
+# Результаты работы
 output/
-output/**
+*_dubbed.mp4
+
+# Временные файлы (нарезка аудио, куски TTS)
 temp/
-temp/**
-src/temp/
-src/temp/**
+tts_parts/
+
+# Сэмплы голосов (ты их генерируешь на лету)
 voices/
-voices/**
-*.mp4
-*.mp3
+
+# Любые тяжелые медиафайлы в корне (на всякий случай)
 *.wav
-*.avi
-*.mov
+*.mp3
+*.mp4
 *.mkv
+*.mov
+*.flac
+
+# ==========================
+# 🍏 MACOS & WINDOWS SYSTEM
+# ==========================
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/ 
+
+# ==========================
+# ⚙️ IDE SETTINGS
+# ==========================
+.vscode/
+.idea/
+*.swpvenv_tts/
