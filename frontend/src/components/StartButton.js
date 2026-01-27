@@ -1,6 +1,6 @@
 import React, { useContext, useState, useEffect, useRef } from 'react';
 import './StartButton.css';
-import { processYouTube, processFile, getStatus, stopProcessing } from '../api';
+import { processYouTube, processFile, getStatus, stopProcessing, healthCheck } from '../api';
 import { AppContext } from '../AppContext';
 
 const StartButton = () => {
@@ -59,6 +59,17 @@ const StartButton = () => {
     setIsProcessing(true);
     setProgress(0);
     try {
+      // Проверяем доступность API сервера перед запуском
+      try {
+        await healthCheck();
+      } catch (healthError) {
+        console.error('API server is not available:', healthError);
+        alert('Ошибка: API сервер не отвечает.\n\nПожалуйста, убедитесь, что приложение запущено корректно и перезапустите его при необходимости.');
+        setIsProcessing(false);
+        setProgress(0);
+        return;
+      }
+
       const processOptions = {
         language: options.language,
         model: options.model,
@@ -78,7 +89,34 @@ const StartButton = () => {
       }
     } catch (error) {
       console.error('Error starting processing:', error);
-      alert('Ошибка запуска обработки');
+      
+      // Формируем информативное сообщение об ошибке
+      let errorMessage = 'Ошибка запуска обработки';
+      
+      if (error.response) {
+        // Ошибка от сервера
+        const status = error.response.status;
+        const data = error.response.data;
+        
+        if (status === 500) {
+          errorMessage = 'Внутренняя ошибка сервера.\n\nПроверьте логи в терминале для деталей.';
+        } else if (status === 400) {
+          errorMessage = data?.error || 'Неверный запрос. Проверьте параметры.';
+        } else if (status === 503) {
+          errorMessage = 'Сервер временно недоступен.\n\nВозможно, идет обработка другого запроса.';
+        } else {
+          errorMessage = `Ошибка сервера (код ${status}).\n\n${data?.error || error.message}`;
+        }
+      } else if (error.request) {
+        // Запрос отправлен, но ответа нет
+        errorMessage = 'Сервер не отвечает.\n\nПроверьте, что API сервер запущен и доступен на порту 5001.';
+      } else if (error.code === 'ECONNREFUSED' || error.code === 'ERR_NETWORK') {
+        errorMessage = 'Не удалось подключиться к API серверу.\n\nУбедитесь, что приложение запущено корректно.';
+      } else if (error.message) {
+        errorMessage = `Ошибка: ${error.message}`;
+      }
+      
+      alert(errorMessage);
       setIsProcessing(false);
       setProgress(0);
     }

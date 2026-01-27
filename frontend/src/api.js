@@ -51,9 +51,32 @@ export const processYouTube = async (url, quality, options) => {
       quality,
       ...options,
     });
+    
+    // Проверяем статус ответа
+    if (response.status >= 400) {
+      const error = new Error(response.data?.error || `HTTP ${response.status}`);
+      error.response = response;
+      throw error;
+    }
+    
     return response.data;
   } catch (error) {
     console.error('Failed to process YouTube:', error);
+    
+    // Если это ошибка axios, пробрасываем её дальше с полной информацией
+    if (error.response) {
+      // Сервер ответил с кодом ошибки
+      const customError = new Error(error.response.data?.error || `Server error: ${error.response.status}`);
+      customError.response = error.response;
+      throw customError;
+    } else if (error.request) {
+      // Запрос отправлен, но ответа нет
+      const customError = new Error('Server is not responding');
+      customError.request = error.request;
+      customError.code = error.code;
+      throw customError;
+    }
+    
     throw error;
   }
 };
@@ -68,10 +91,39 @@ export const processFile = async (file, options) => {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
+      timeout: 300000, // 5 минут для загрузки больших файлов
     });
+    
+    // Проверяем статус ответа
+    if (response.status >= 400) {
+      const error = new Error(response.data?.error || `HTTP ${response.status}`);
+      error.response = response;
+      throw error;
+    }
+    
     return response.data;
   } catch (error) {
     console.error('Failed to process file:', error);
+    
+    // Если это ошибка axios, пробрасываем её дальше с полной информацией
+    if (error.response) {
+      // Сервер ответил с кодом ошибки
+      const customError = new Error(error.response.data?.error || `Server error: ${error.response.status}`);
+      customError.response = error.response;
+      throw customError;
+    } else if (error.request) {
+      // Запрос отправлен, но ответа нет
+      const customError = new Error('Server is not responding');
+      customError.request = error.request;
+      customError.code = error.code;
+      throw customError;
+    } else if (error.code === 'ECONNABORTED') {
+      // Таймаут
+      const customError = new Error('Request timeout. The file might be too large.');
+      customError.code = error.code;
+      throw customError;
+    }
+    
     throw error;
   }
 };
