@@ -1,6 +1,17 @@
 import axios from 'axios';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
+// Порт из query (Electron передаёт apiPort при запуске на другом порту) или из env.
+// 127.0.0.1 чтобы на macOS не упираться в IPv6 (localhost → ::1).
+function getApiBaseUrl() {
+  if (process.env.REACT_APP_API_URL) return process.env.REACT_APP_API_URL;
+  const params = new URLSearchParams(window.location.search);
+  const port = params.get('apiPort');
+  if (port) return `http://127.0.0.1:${port}/api`;
+  return 'http://127.0.0.1:5001/api';
+}
+
+const API_BASE_URL = getApiBaseUrl();
+export { API_BASE_URL };
 
 const api = axios.create({
   baseURL: API_BASE_URL,

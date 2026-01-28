@@ -1,6 +1,7 @@
 import React, { useContext, useEffect, useRef } from 'react';
 import './App.css';
 import { AppProvider, AppContext } from './AppContext';
+import { API_BASE_URL } from './api';
 import Header from './components/Header';
 import Tabs from './components/Tabs';
 import VideoSource from './components/VideoSource';
@@ -63,11 +64,11 @@ const AppContent = () => {
       try {
         // Используем sendBeacon для надежной отправки даже при закрытии
         const data = JSON.stringify({});
-        navigator.sendBeacon('http://localhost:5001/api/stop', data);
+        const stopUrl = `${API_BASE_URL}/stop`;
+        navigator.sendBeacon(stopUrl, data);
         
-        // Также пытаемся отправить через fetch (fallback)
         try {
-          await fetch('http://localhost:5001/api/stop', {
+          await fetch(stopUrl, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -89,7 +90,7 @@ const AppContent = () => {
     const handleUnload = () => {
       try {
         const data = JSON.stringify({});
-        navigator.sendBeacon('http://localhost:5001/api/stop', data);
+        navigator.sendBeacon(`${API_BASE_URL}/stop`, data);
       } catch (error) {
         // Игнорируем ошибки
       }

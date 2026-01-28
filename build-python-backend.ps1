@@ -6,14 +6,21 @@ $ErrorActionPreference = "Stop"  # Останавливаем выполнени
 
 Write-Host "🔨 Начинаем упаковку Python backend (обязательный компонент)..."
 
-# Проверяем наличие Python
+# Ищем Python: на Windows часто в PATH только "py" (Python Launcher), не "python"
 Write-Host "🐍 Проверка Python..."
-try {
-    $pythonVersion = python --version 2>&1
-    Write-Host "✅ Python найден: $pythonVersion"
-} catch {
+$PythonCmd = $null
+foreach ($c in @("py -3", "py", "python", "python3")) {
+    cmd /c "$c --version" 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        $PythonCmd = $c
+        $ver = cmd /c "$c --version" 2>&1
+        Write-Host "✅ Python найден: $ver (команда: $c)"
+        break
+    }
+}
+if (-not $PythonCmd) {
     Write-Host "❌ КРИТИЧЕСКАЯ ОШИБКА: Python не найден!"
-    Write-Host "Python обязателен для сборки backend"
+    Write-Host "Установите Python 3.10+ с опцией 'Add Python to PATH' или запустите через 'py' (Python Launcher)."
     exit 1
 }
 
@@ -29,7 +36,7 @@ New-Item -ItemType Directory -Force -Path "python-backend-dist" | Out-Null
 # Создаем venv для сборки
 Write-Host "📦 Создаем Python venv..."
 try {
-    python -m venv venv_build
+    Invoke-Expression "$PythonCmd -m venv venv_build"
     if (-not (Test-Path "venv_build\Scripts\Activate.ps1")) {
         Write-Host "❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось создать venv"
         exit 1

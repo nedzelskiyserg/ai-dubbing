@@ -1,9 +1,14 @@
 const { app, BrowserWindow, Menu, clipboard, ipcMain } = require('electron');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 const { spawn } = require('child_process');
 
 let mainWindow;
 let apiServer;
+/** Порт API (5001 или следующий свободный). Заполняется после чтения API_PORT_FILE. */
+let apiPort = 5001;
+let apiPortFilePath = null;
 
 // Функция для создания окна
 function createWindow() {
@@ -41,18 +46,16 @@ function createWindow() {
     icon: process.platform === 'win32' ? path.join(__dirname, '../build/icon.ico') : undefined
   });
 
-  // Загружаем React приложение
+  // Загружаем React приложение (передаём порт API в query для совпадения с backend)
   const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
-  
   if (isDev) {
-    // В режиме разработки подключаемся к React dev server
-    mainWindow.loadURL('http://localhost:3000');
-    
-    // Открываем DevTools в режиме разработки (опционально)
-    // mainWindow.webContents.openDevTools();
+    const apiPortParam = apiPort !== 5001 ? `apiPort=${apiPort}` : '';
+    const devUrl = apiPortParam ? `http://localhost:3000?${apiPortParam}` : 'http://localhost:3000';
+    mainWindow.loadURL(devUrl);
   } else {
-    // В production загружаем из build
-    mainWindow.loadFile(path.join(__dirname, '../build/index.html'));
+    // В production всегда передаём apiPort в query — фронт читает 127.0.0.1:${port}/api
+    const loadOpts = { query: { apiPort: String(apiPort) } };
+    mainWindow.loadFile(path.join(__dirname, '../build/index.html'), loadOpts);
   }
 
   // Показываем окно когда готово
@@ -81,8 +84,8 @@ function createWindow() {
       const postData = JSON.stringify({});
       
       const options = {
-        hostname: 'localhost',
-        port: 5001,
+        hostname: '127.0.0.1',
+        port: apiPort,
         path: '/api/stop',
         method: 'POST',
         headers: {
@@ -327,8 +330,6 @@ function createMenu() {
 
 // Запуск API сервера
 function startApiServer() {
-  const fs = require('fs');
-  
   // Определяем пути в зависимости от режима (dev/production)
   let apiPath, pythonPath, cwd;
   
@@ -400,9 +401,12 @@ function startApiServer() {
     pythonPath = process.env.PYTHON_PATH || (fs.existsSync(venvPython) ? venvPython : (process.platform === 'win32' ? 'python' : 'python3'));
   }
   
+  // Уникальный файл на каждый запуск — иначе читаем порт от предыдущего процесса
+  apiPortFilePath = path.join(os.tmpdir(), `ai-dubbing-api-port-${Date.now()}-${process.pid}.txt`);
   const serverOptions = {
     cwd: cwd,
     stdio: 'pipe',
+    env: Object.assign({}, process.env, { API_PORT_FILE: apiPortFilePath }),
   };
 
   // На Windows нужно использовать shell
@@ -613,24 +617,52 @@ function startApiServer() {
   });
 }
 
-// Проверка, запущен ли API сервер
-function checkApiServer() {
+// Проверка, запущен ли API сервер (127.0.0.1 чтобы не упереться в IPv6 на macOS)
+function checkApiServer(port) {
+  const p = port != null ? port : apiPort;
   return new Promise((resolve) => {
     const http = require('http');
-    const req = http.get('http://localhost:5001/api/health', (res) => {
-      resolve(true);
+    const req = http.get(`http://127.0.0.1:${p}/api/health`, (res) => {
+      resolve(res.statusCode === 200);
     });
     req.on('error', () => {
       resolve(false);
     });
-    req.setTimeout(1000, () => {
+    req.setTimeout(2000, () => {
       req.destroy();
       resolve(false);
     });
   });
 }
 
-// Ожидание готовности API сервера с повторными попытками
+// Ждём появления файла с портом от backend (макс. 10 с — .exe на Windows может долго стартовать)
+function waitForPortFile(filePath, maxWaitMs = 10000) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const tick = () => {
+      try {
+        if (fs.existsSync(filePath)) {
+          const content = fs.readFileSync(filePath, 'utf8').trim();
+          if (content) {
+            const p = parseInt(content, 10);
+            if (Number.isInteger(p) && p > 0) {
+              resolve(p);
+              return;
+            }
+          }
+        }
+      } catch (e) {}
+      if (Date.now() - start >= maxWaitMs) {
+        resolve(5001);
+        return;
+      }
+      setTimeout(tick, 100);
+    };
+    tick();
+  });
+}
+
+// Ожидание готовности API сервера с повторными попытками (порт берётся из глобального apiPort)
 function waitForApiServer(maxAttempts = 30, delay = 1000) {
   return new Promise((resolve, reject) => {
     let attempts = 0;
@@ -640,13 +672,12 @@ function waitForApiServer(maxAttempts = 30, delay = 1000) {
       const isRunning = await checkApiServer();
       
       if (isRunning) {
-        console.log('✅ API сервер готов');
+        console.log(`✅ API сервер готов (порт ${apiPort})`);
         resolve(true);
       } else if (attempts >= maxAttempts) {
         console.error('❌ API сервер не запустился за отведенное время');
         reject(new Error('API server did not start in time'));
       } else {
-        // Продолжаем проверку
         setTimeout(check, delay);
       }
     };
@@ -671,14 +702,23 @@ app.whenReady().then(async () => {
   const apiRunning = await checkApiServer();
   
   if (!apiRunning) {
-    // Запускаем API сервер только если он не запущен
     console.log('Запуск API сервера из Electron...');
     startApiServer();
-    
-    // Ждем, пока API сервер станет доступен (максимум 30 секунд)
+    // Ждём файл с портом (backend пишет его до app.run; при API_PORT_FILE reloader выключен, порт один)
+    if (apiPortFilePath) {
+      const portFromFile = await waitForPortFile(apiPortFilePath);
+      if (portFromFile) {
+        apiPort = portFromFile;
+        if (apiPort !== 5001) {
+          console.log(`⏳ Порт 5001 занят, backend использует порт ${apiPort}`);
+        }
+      }
+    }
     try {
+      // Даём серверу время принять соединения после bind (особенно на macOS)
+      await new Promise(r => setTimeout(r, 400));
       console.log('⏳ Ожидание готовности API сервера...');
-      await waitForApiServer(30, 1000);
+      await waitForApiServer(40, 500);
       console.log('✅ API сервер успешно запущен и готов к работе');
     } catch (error) {
       console.error('❌ Не удалось дождаться запуска API сервера:', error);
@@ -708,7 +748,6 @@ app.whenReady().then(async () => {
     console.log('API сервер уже запущен, пропускаем запуск из Electron');
   }
   
-  // Создаем окно
   createWindow();
 
   app.on('activate', () => {
@@ -743,8 +782,8 @@ app.on('before-quit', async (event) => {
     const postData = JSON.stringify({});
     
     const options = {
-      hostname: 'localhost',
-      port: 5001,
+      hostname: '127.0.0.1',
+      port: apiPort,
       path: '/api/stop',
       method: 'POST',
       headers: {

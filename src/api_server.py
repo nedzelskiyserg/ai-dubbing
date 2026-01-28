@@ -1177,6 +1177,31 @@ if __name__ == '__main__':
     # Настраиваем логирование - отключаем шумные логи Flask
     logging.getLogger('werkzeug').setLevel(logging.WARNING)
     
-    # Запускаем сервер на порту 5001 (5000 часто занят AirPlay на macOS)
-    port = int(os.getenv('API_PORT', 5001))
-    app.run(host='0.0.0.0', port=port, debug=True, request_handler=FilteredRequestHandler)
+    # Порт: из переменной или ищем свободный в 5001–5010 (если 5001 занят — берём следующий)
+    import socket
+    def find_free_port(start=5001, end=5010):
+        for p in range(start, end + 1):
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.bind(('', p))
+                    return p
+            except OSError:
+                continue
+        return start  # fallback — тогда app.run выдаст "Address already in use"
+    port = int(os.getenv('API_PORT', 0)) or find_free_port()
+    port_file = os.getenv('API_PORT_FILE')
+    # При запуске из Electron (API_PORT_FILE задан) отключаем reloader: иначе Flask создаёт
+    # второй процесс с другим портом, и Electron проверяет не тот порт. Debug в этом режиме тоже выключаем.
+    use_debug = not bool(port_file)
+    use_reloader = not bool(port_file)
+    if port_file:
+        try:
+            # Path() нормализует слэши под ОС (важно для Windows при запуске из .exe)
+            port_path = Path(port_file).resolve()
+            port_path.parent.mkdir(parents=True, exist_ok=True)
+            port_path.write_text(str(port), encoding='utf-8')
+        except Exception:
+            pass
+    if port != 5001:
+        print(f"Порт 5001 занят, используем порт {port}", flush=True)
+    app.run(host='0.0.0.0', port=port, debug=use_debug, use_reloader=use_reloader, request_handler=FilteredRequestHandler)
