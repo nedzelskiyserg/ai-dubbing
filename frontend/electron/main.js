@@ -499,6 +499,10 @@ function startApiServer() {
   
   console.log(`✅ Процесс API сервера создан (PID: ${apiServer.pid})`);
 
+  // Буфер stderr для показа в диалоге при падении (пользователь не видит консоль в упакованном приложении)
+  apiServer._stderrBuffer = [];
+  const MAX_STDERR_LENGTH = 4000;
+
   apiServer.stdout.on('data', (data) => {
     const output = data.toString();
     console.log(`API: ${output}`);
@@ -512,6 +516,12 @@ function startApiServer() {
   apiServer.stderr.on('data', (data) => {
     const error = data.toString();
     console.error(`API Error: ${error}`);
+    apiServer._stderrBuffer.push(error);
+    let total = apiServer._stderrBuffer.join('').length;
+    while (total > MAX_STDERR_LENGTH && apiServer._stderrBuffer.length > 1) {
+      apiServer._stderrBuffer.shift();
+      total = apiServer._stderrBuffer.join('').length;
+    }
     
     // Не все ошибки критичны - Flask может выводить предупреждения в stderr
     if (error.includes('ERROR') || error.includes('Traceback') || error.includes('Exception') || error.includes('ModuleNotFoundError') || error.includes('ImportError')) {
@@ -541,15 +551,20 @@ function startApiServer() {
       // Показываем ошибку пользователю, если это не ожидаемое завершение
       if (code !== null && code !== 0 && !apiServer.killed) {
         const { dialog } = require('electron');
+        const stderrText = (apiServer._stderrBuffer && apiServer._stderrBuffer.length)
+          ? apiServer._stderrBuffer.join('').trim().slice(-MAX_STDERR_LENGTH)
+          : '';
+        const detailBlock = stderrText
+          ? `\n\nВывод сервера (ошибка):\n${stderrText.replace(/\r\n/g, '\n')}`
+          : '\n\n(Вывод сервера пуст — перезапустите приложение с открытой консолью разработчика: Ctrl+Shift+I → Console.)';
         dialog.showErrorBox(
           'API сервер завершился с ошибкой',
-          `API сервер неожиданно завершился с кодом ${code}.\n\n` +
-          `Проверьте логи в консоли для деталей.\n\n` +
+          `API сервер неожиданно завершился с кодом ${code}.${detailBlock}\n\n` +
           `Возможные причины:\n` +
-          `1. Ошибка в Python коде\n` +
-          `2. Отсутствуют зависимости\n` +
-          `3. Проблемы с конфигурацией\n\n` +
-          `Попробуйте перезапустить приложение.`
+          `1. Ошибка в Python коде или отсутствующий модуль\n` +
+          `2. Отсутствуют зависимости / несовместимая версия Windows\n` +
+          `3. Антивирус блокирует или удалил файлы backend\n\n` +
+          `Попробуйте перезапустить приложение или переустановить.`
         );
       }
     }

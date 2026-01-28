@@ -1,31 +1,45 @@
 """
 API сервер для связи React фронтенда с Python бэкендом
 """
-from flask import Flask, request, jsonify, send_file
-from flask_cors import CORS
 import os
 import sys
-import json
-import asyncio
-import threading
-import logging
-import signal
+import traceback
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
-import multiprocessing
-import threading
-from werkzeug.serving import WSGIRequestHandler
 
-# Добавляем путь к src
+# Добавляем путь к src (для режима разработки; в PyInstaller bundle пути свои)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core.downloader import download_video
-from core.transcriber import Transcriber
-from core.translator import Translator
-from core.corrector import SpeakerCorrector
-from core.voice_cloner import VoiceCloner
-from core.video_maker import VideoMaker
-from core.config import APP_PATHS
+try:
+    from flask import Flask, request, jsonify, send_file
+    from flask_cors import CORS
+    import json
+    import asyncio
+    import threading
+    import logging
+    import signal
+    from concurrent.futures import ThreadPoolExecutor
+    import multiprocessing
+    from werkzeug.serving import WSGIRequestHandler
+
+    from core.downloader import download_video
+    from core.transcriber import Transcriber
+    from core.translator import Translator
+    from core.corrector import SpeakerCorrector
+    from core.voice_cloner import VoiceCloner
+    from core.video_maker import VideoMaker
+    from core.config import APP_PATHS
+except Exception:
+    # В упакованном exe при падении на импорте пишем лог — пользователь не видит консоль
+    if getattr(sys, "frozen", False):
+        try:
+            crash_dir = Path.home() / "Documents" / "AI Dubbing Studio"
+            crash_dir.mkdir(parents=True, exist_ok=True)
+            crash_log = crash_dir / "api-server-crash.log"
+            with open(crash_log, "w", encoding="utf-8") as f:
+                f.write(traceback.format_exc())
+        except Exception:
+            pass
+    raise
 
 app = Flask(__name__)
 CORS(app)  # Разрешаем CORS для React
