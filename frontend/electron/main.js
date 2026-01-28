@@ -10,6 +10,44 @@ let apiServer;
 let apiPort = 5001;
 let apiPortFilePath = null;
 
+// --- Подробное диагностическое логирование (консоль + файл для .exe) ---
+// Windows: %LOCALAPPDATA%\AI Dubbing Studio\electron-api-debug.log (не Документы)
+// macOS/Linux: userData/electron-api-debug.log
+let diagnosticLogPath = null;
+function getDiagnosticLogPath() {
+  if (diagnosticLogPath) return diagnosticLogPath;
+  try {
+    if (process.platform === 'win32') {
+      const localDir = path.join(process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Local'), 'AI Dubbing Studio');
+      if (!fs.existsSync(localDir)) fs.mkdirSync(localDir, { recursive: true });
+      diagnosticLogPath = path.join(localDir, 'electron-api-debug.log');
+    } else {
+      const dir = app.getPath('userData');
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      diagnosticLogPath = path.join(dir, 'electron-api-debug.log');
+    }
+    return diagnosticLogPath;
+  } catch (e) {
+    return path.join(app.getPath('temp'), 'ai-dubbing-electron-debug.log');
+  }
+}
+let diagnosticLogStarted = false;
+function logDiag(msg, obj) {
+  const line = typeof msg === 'string' ? msg : JSON.stringify(msg);
+  const full = `[${new Date().toISOString()}] ${line}${obj !== undefined ? ' ' + JSON.stringify(obj) : ''}`;
+  console.log(full);
+  try {
+    if (app.isPackaged) {
+      const logPath = getDiagnosticLogPath();
+      if (!diagnosticLogStarted) {
+        diagnosticLogStarted = true;
+        fs.appendFileSync(logPath, `\n========== AI Dubbing Studio Electron API debug ${new Date().toISOString()} ==========\nЛог: ${logPath}\n`, 'utf8');
+      }
+      fs.appendFileSync(logPath, full + '\n', 'utf8');
+    }
+  } catch (e) {}
+}
+
 // Функция для создания окна
 function createWindow() {
   // Получаем размеры экрана
@@ -409,16 +447,23 @@ function startApiServer() {
     env: Object.assign({}, process.env, { API_PORT_FILE: apiPortFilePath }),
   };
 
-  // На Windows нужно использовать shell
   if (process.platform === 'win32') {
     serverOptions.shell = true;
   }
-  
-  // Логируем информацию о запуске
+
+  logDiag('--- Запуск API сервера ---');
+  logDiag('executable', { pythonPath, apiPath: apiPath || '(exe)', cwd });
+  logDiag('API_PORT_FILE (передаётся в env backend)', { apiPortFilePath });
+  logDiag('platform', { platform: process.platform, packaged: app.isPackaged });
+  if (app.isPackaged) {
+    logDiag('packaged: resourcesPath', process.resourcesPath);
+    logDiag('packaged: exe dir', path.dirname(app.getPath('exe')));
+  }
   console.log('🔧 Запуск API сервера:');
   console.log(`   Python: ${pythonPath}`);
   console.log(`   API Path: ${apiPath || '(исполняемый файл)'}`);
   console.log(`   CWD: ${cwd}`);
+  console.log(`   API_PORT_FILE: ${apiPortFilePath}`);
   console.log(`   Packaged: ${app.isPackaged}`);
   
   // Финальная проверка существования файлов перед запуском
@@ -486,21 +531,19 @@ function startApiServer() {
     }
   }
   
-  // Если это упакованный backend (exe), запускаем напрямую
   if (app.isPackaged && pythonPath.endsWith('.exe')) {
-    console.log('🚀 Запуск упакованного backend...');
+    logDiag('spawn: упакованный .exe', { cmd: pythonPath, args: [] });
     apiServer = spawn(pythonPath, [], serverOptions);
   } else {
-    // Иначе запускаем Python скрипт
-    console.log('🚀 Запуск Python скрипта...');
+    logDiag('spawn: Python скрипт', { cmd: pythonPath, args: [apiPath] });
     apiServer = spawn(pythonPath, [apiPath], serverOptions);
   }
-  
+
   if (!apiServer) {
-    console.error('❌ Не удалось создать процесс API сервера');
+    logDiag('ERROR: spawn вернул null');
     return;
   }
-  
+  logDiag('процесс создан', { pid: apiServer.pid });
   console.log(`✅ Процесс API сервера создан (PID: ${apiServer.pid})`);
 
   // Буфер stderr для показа в диалоге при падении (пользователь не видит консоль в упакованном приложении)
@@ -509,9 +552,8 @@ function startApiServer() {
 
   apiServer.stdout.on('data', (data) => {
     const output = data.toString();
+    logDiag('API stdout', { line: output.trim().slice(0, 200) });
     console.log(`API: ${output}`);
-    
-    // Проверяем, запустился ли сервер (обычно Flask выводит "Running on")
     if (output.includes('Running on') || output.includes('Serving Flask app') || output.includes('* Running on')) {
       console.log('✅ API сервер запустился и слушает порт');
     }
@@ -519,6 +561,7 @@ function startApiServer() {
 
   apiServer.stderr.on('data', (data) => {
     const error = data.toString();
+    logDiag('API stderr', { line: error.trim().slice(0, 300) });
     console.error(`API Error: ${error}`);
     apiServer._stderrBuffer.push(error);
     let total = apiServer._stderrBuffer.join('').length;
@@ -548,19 +591,22 @@ function startApiServer() {
   });
 
   apiServer.on('close', (code, signal) => {
+    const stderrFull = (apiServer._stderrBuffer && apiServer._stderrBuffer.length)
+      ? apiServer._stderrBuffer.join('').trim()
+      : '';
+    logDiag('API процесс завершён', { code, signal, killed: apiServer.killed, stderrLength: stderrFull.length });
+    if (stderrFull) logDiag('API stderr (полный)', { text: stderrFull.slice(-2000) });
     console.log(`API сервер завершился (код: ${code}, сигнал: ${signal})`);
     if (code !== 0 && code !== null) {
       console.error(`❌ API сервер завершился с ошибкой (код: ${code})`);
-      
-      // Показываем ошибку пользователю, если это не ожидаемое завершение
       if (code !== null && code !== 0 && !apiServer.killed) {
         const { dialog } = require('electron');
-        const stderrText = (apiServer._stderrBuffer && apiServer._stderrBuffer.length)
-          ? apiServer._stderrBuffer.join('').trim().slice(-MAX_STDERR_LENGTH)
-          : '';
+        const stderrText = stderrFull.slice(-MAX_STDERR_LENGTH);
+        const logPath = app.isPackaged ? getDiagnosticLogPath() : '';
         const detailBlock = stderrText
           ? `\n\nВывод сервера (ошибка):\n${stderrText.replace(/\r\n/g, '\n')}`
-          : '\n\n(Вывод сервера пуст — перезапустите приложение с открытой консолью разработчика: Ctrl+Shift+I → Console.)';
+          : '\n\n(Вывод сервера пуст.)';
+        const logHint = logPath ? `\n\nПолный лог: ${logPath}` : '';
         dialog.showErrorBox(
           'API сервер завершился с ошибкой',
           `API сервер неожиданно завершился с кодом ${code}.${detailBlock}\n\n` +
@@ -568,7 +614,7 @@ function startApiServer() {
           `1. Ошибка в Python коде или отсутствующий модуль\n` +
           `2. Отсутствуют зависимости / несовместимая версия Windows\n` +
           `3. Антивирус блокирует или удалил файлы backend\n\n` +
-          `Попробуйте перезапустить приложение или переустановить.`
+          `Попробуйте перезапустить приложение или переустановить.${logHint}`
         );
       }
     }
@@ -617,42 +663,54 @@ function startApiServer() {
   });
 }
 
-// Проверка, запущен ли API сервер (127.0.0.1 чтобы не упереться в IPv6 на macOS)
+// Проверка, запущен ли API сервер. Возвращает { ok, statusCode, errorMessage } для логирования.
 function checkApiServer(port) {
   const p = port != null ? port : apiPort;
   return new Promise((resolve) => {
     const http = require('http');
-    const req = http.get(`http://127.0.0.1:${p}/api/health`, (res) => {
-      resolve(res.statusCode === 200);
+    const url = `http://127.0.0.1:${p}/api/health`;
+    const req = http.get(url, (res) => {
+      resolve({ ok: res.statusCode === 200, statusCode: res.statusCode, errorMessage: null });
     });
-    req.on('error', () => {
-      resolve(false);
+    req.on('error', (err) => {
+      resolve({ ok: false, statusCode: null, errorMessage: err.code || err.message || String(err) });
     });
     req.setTimeout(2000, () => {
       req.destroy();
-      resolve(false);
+      resolve({ ok: false, statusCode: null, errorMessage: 'timeout' });
     });
   });
 }
 
 // Ждём появления файла с портом от backend (макс. 10 с — .exe на Windows может долго стартовать)
 function waitForPortFile(filePath, maxWaitMs = 10000) {
+  logDiag('waitForPortFile: начало', { filePath, maxWaitMs });
   return new Promise((resolve) => {
     const start = Date.now();
+    let lastLog = 0;
     const tick = () => {
+      const elapsed = Date.now() - start;
       try {
         if (fs.existsSync(filePath)) {
           const content = fs.readFileSync(filePath, 'utf8').trim();
           if (content) {
             const p = parseInt(content, 10);
             if (Number.isInteger(p) && p > 0) {
+              logDiag('waitForPortFile: прочитан порт', { filePath, content, port: p, elapsed });
               resolve(p);
               return;
             }
+            logDiag('waitForPortFile: файл есть, порт невалидный', { content });
           }
+        } else if (elapsed - lastLog >= 1000) {
+          lastLog = elapsed;
+          logDiag('waitForPortFile: ждём файл', { elapsed, filePath });
         }
-      } catch (e) {}
-      if (Date.now() - start >= maxWaitMs) {
+      } catch (e) {
+        logDiag('waitForPortFile: ошибка чтения', { err: e.message, filePath });
+      }
+      if (elapsed >= maxWaitMs) {
+        logDiag('waitForPortFile: таймаут, fallback 5001', { elapsed, filePath });
         resolve(5001);
         return;
       }
@@ -664,24 +722,27 @@ function waitForPortFile(filePath, maxWaitMs = 10000) {
 
 // Ожидание готовности API сервера с повторными попытками (порт берётся из глобального apiPort)
 function waitForApiServer(maxAttempts = 30, delay = 1000) {
+  logDiag('waitForApiServer: начало', { maxAttempts, delay, apiPort });
   return new Promise((resolve, reject) => {
     let attempts = 0;
-    
     const check = async () => {
       attempts++;
-      const isRunning = await checkApiServer();
-      
-      if (isRunning) {
+      const result = await checkApiServer();
+      if (attempts <= 3 || attempts % 5 === 0 || result.ok) {
+        logDiag('waitForApiServer: попытка', { attempt: attempts, port: apiPort, ok: result.ok, statusCode: result.statusCode, error: result.errorMessage });
+      }
+      if (result.ok) {
+        logDiag('waitForApiServer: успех', { attempt: attempts, apiPort });
         console.log(`✅ API сервер готов (порт ${apiPort})`);
         resolve(true);
       } else if (attempts >= maxAttempts) {
+        logDiag('waitForApiServer: таймаут', { attempts, apiPort, lastError: result.errorMessage, lastStatus: result.statusCode });
         console.error('❌ API сервер не запустился за отведенное время');
         reject(new Error('API server did not start in time'));
       } else {
         setTimeout(check, delay);
       }
     };
-    
     check();
   });
 }
@@ -698,53 +759,67 @@ ipcMain.handle('clipboard-write-text', (event, text) => {
 
 // Когда Electron готов
 app.whenReady().then(async () => {
-  // Проверяем, запущен ли API сервер (если запущен из скрипта, не запускаем еще раз)
-  const apiRunning = await checkApiServer();
-  
+  logDiag('--- app.whenReady: проверка API ---');
+  const healthResult = await checkApiServer();
+  const apiRunning = healthResult.ok;
+  logDiag('начальная проверка API', { apiRunning, port: apiPort, statusCode: healthResult.statusCode, error: healthResult.errorMessage });
+
   if (!apiRunning) {
+    logDiag('API не запущен — запускаем backend');
     console.log('Запуск API сервера из Electron...');
     startApiServer();
-    // Ждём файл с портом (backend пишет его до app.run; при API_PORT_FILE reloader выключен, порт один)
     if (apiPortFilePath) {
       const portFromFile = await waitForPortFile(apiPortFilePath);
+      logDiag('результат waitForPortFile', { portFromFile, apiPortFilePath });
       if (portFromFile) {
         apiPort = portFromFile;
         if (apiPort !== 5001) {
           console.log(`⏳ Порт 5001 занят, backend использует порт ${apiPort}`);
         }
+      } else {
+        logDiag('portFromFile пустой или 0, оставляем apiPort', { apiPort });
       }
+    } else {
+      logDiag('apiPortFilePath не задан (startApiServer не вызван или вышел по return)');
     }
     try {
-      // Даём серверу время принять соединения после bind (особенно на macOS)
       await new Promise(r => setTimeout(r, 400));
       console.log('⏳ Ожидание готовности API сервера...');
       await waitForApiServer(40, 500);
       console.log('✅ API сервер успешно запущен и готов к работе');
     } catch (error) {
+      const logPath = app.isPackaged ? getDiagnosticLogPath() : '';
+      logDiag('ERROR: waitForApiServer таймаут', {
+        apiPort,
+        apiPortFilePath,
+        portFileExists: apiPortFilePath ? fs.existsSync(apiPortFilePath) : false,
+        portFileContent: apiPortFilePath && fs.existsSync(apiPortFilePath) ? fs.readFileSync(apiPortFilePath, 'utf8').trim() : '',
+        processAlive: apiServer && !apiServer.killed,
+        pid: apiServer ? apiServer.pid : null,
+        stderrLength: apiServer && apiServer._stderrBuffer ? apiServer._stderrBuffer.join('').length : 0,
+        diagnosticLogPath: logPath,
+      });
       console.error('❌ Не удалось дождаться запуска API сервера:', error);
-      
-      // Проверяем, запущен ли процесс
       if (apiServer && !apiServer.killed) {
         console.log(`   Процесс все еще запущен (PID: ${apiServer.pid})`);
-        console.log('   Возможно, сервер еще запускается или есть проблемы с портом');
       } else {
         console.error('   Процесс API сервера не запущен или завершился');
       }
-      
-      // Показываем предупреждение пользователю
       const { dialog } = require('electron');
+      const logHint = logPath ? `\n\nПодробный лог: ${logPath}` : '';
       dialog.showErrorBox(
         'Предупреждение: API сервер не отвечает',
         `API сервер не стал доступен за отведенное время.\n\n` +
         `Возможные причины:\n` +
         `1. Сервер еще запускается (подождите несколько секунд)\n` +
-        `2. Порт 5001 занят другим приложением\n` +
+        `2. Порт занят другим приложением\n` +
         `3. Ошибка при запуске Python backend\n\n` +
         `Проверьте логи в консоли для деталей.\n` +
-        `Попробуйте перезапустить приложение.`
+        `Попробуйте перезапустить приложение.${logHint}`
       );
     }
   } else {
+    logDiag('API уже запущен, пропускаем startApiServer');
     console.log('API сервер уже запущен, пропускаем запуск из Electron');
   }
   
