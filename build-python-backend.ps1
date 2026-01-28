@@ -50,6 +50,8 @@ try {
     }
     
     .\venv_build\Scripts\Activate.ps1
+    # На Windows pip читает requirements.txt в cp1252 — при UTF-8 в файле получаем UnicodeDecodeError. Включаем UTF-8.
+    $env:PYTHONUTF8 = "1"
     pip install --upgrade pip
     Write-Host "✅ Venv создан и активирован"
 } catch {
@@ -58,7 +60,7 @@ try {
     exit 1
 }
 
-# Устанавливаем зависимости (pip может не выйти с ошибкой при несовместимости пакета — проверяем потом)
+# Устанавливаем зависимости (PYTHONUTF8=1 уже задан выше — читаем requirements.txt в UTF-8)
 Write-Host "📦 Установка зависимостей..."
 $pipResult = pip install -r requirements.txt 2>&1
 if ($LASTEXITCODE -ne 0) {
