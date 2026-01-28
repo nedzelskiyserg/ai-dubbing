@@ -447,7 +447,10 @@ function startApiServer() {
     env: Object.assign({}, process.env, { API_PORT_FILE: apiPortFilePath }),
   };
 
-  if (process.platform === 'win32') {
+  // shell: true только для Python-скрипта (python script.py). Для .exe по полному пути — НЕ использовать shell:
+  // иначе путь с пробелами (C:\Program Files\...) разбивается cmd на "C:\Program" и "Files\..."
+  const isExe = pythonPath.toLowerCase().endsWith('.exe');
+  if (process.platform === 'win32' && !isExe) {
     serverOptions.shell = true;
   }
 
