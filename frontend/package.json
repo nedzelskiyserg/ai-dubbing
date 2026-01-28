@@ -93,7 +93,6 @@
         }
       ],
       "icon": "build/icon.ico",
-      "artifactName": "${productName}-${version}-${arch}.${ext}",
       "requestedExecutionLevel": "asInvoker",
       "extraResources": []
     },
@@ -105,7 +104,8 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "AI Dubbing Studio"
+      "shortcutName": "AI Dubbing Studio",
+      "artifactName": "${productName}-${version}-${arch}-Setup.${ext}"
     },
     "compression": "maximum",
     "publish": null
