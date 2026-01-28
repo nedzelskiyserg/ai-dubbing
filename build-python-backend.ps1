@@ -63,6 +63,16 @@ try {
     exit 1
 }
 
+# Проверяем, что Flask доступен (иначе exe выдаст ModuleNotFoundError: No module named 'flask')
+Write-Host "🔍 Проверка Flask..."
+try {
+    $null = python -c "import flask; import flask_cors; print('OK')"
+    Write-Host "✅ Flask доступен"
+} catch {
+    Write-Host "❌ КРИТИЧЕСКАЯ ОШИБКА: Flask не найден в venv (pip install flask flask-cors)"
+    exit 1
+}
+
 # Проверяем наличие FFmpeg (обязателен для работы)
 Write-Host "🎬 Проверка FFmpeg..."
 if (-not (Test-Path "ffmpeg\ffmpeg.exe")) {
@@ -83,7 +93,8 @@ foreach ($dll in $dllFiles) {
     $pyinstallerCmd += " --add-binary `"ffmpeg\$($dll.Name);.`""
 }
 
-# Добавляем остальные параметры
+# Явно подключаем Flask и зависимости (иначе в exe: ModuleNotFoundError: No module named 'flask')
+$pyinstallerCmd += " --hidden-import=flask --hidden-import=flask_cors --hidden-import=werkzeug --hidden-import=werkzeug.serving --hidden-import=jinja2"
 $pyinstallerCmd += " --collect-all flask --collect-all flask_cors --collect-all faster_whisper --collect-all pyannote --hidden-import=whisperx --hidden-import=torch --hidden-import=torchaudio --hidden-import=coqui --hidden-import=moviepy src/api_server.py"
 
 Write-Host "📝 Команда PyInstaller: $pyinstallerCmd"
