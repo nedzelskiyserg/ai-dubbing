@@ -264,12 +264,13 @@ jobs:
         Write-Host ""
         Write-Host "✅ Все обязательные компоненты проверены и готовы к сборке"
 
-    # 12. Собираем Electron приложение
+    # 12. Собираем Electron приложение (БЕЗ повторного npm run build — React уже собран в шаге 6,
+    #     python-backend и ffmpeg добавлены в frontend/build в шагах 9–10; dist:win делает build и затирает build/)
     - name: Build Electron app
       working-directory: ./frontend
       run: |
         Write-Host "🔨 Начинаем сборку Electron приложения..."
-        npm run dist:win
+        npx electron-builder --win
         
         Write-Host "📋 Проверка созданных файлов..."
         Get-ChildItem -Path dist-electron -Filter *.exe | ForEach-Object {
