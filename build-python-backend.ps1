@@ -6,21 +6,28 @@ $ErrorActionPreference = "Stop"  # Останавливаем выполнени
 
 Write-Host "🔨 Начинаем упаковку Python backend (обязательный компонент)..."
 
-# Ищем Python: на Windows часто в PATH только "py" (Python Launcher), не "python"
-Write-Host "🐍 Проверка Python..."
+# Ищем Python 3.10–3.12 (whisperx требует <3.14,>=3.10). В CI (GitHub Actions) первым идёт "python" из setup-python.
+Write-Host "🐍 Проверка Python (нужен 3.10, 3.11 или 3.12 — не 3.14!)..."
 $PythonCmd = $null
-foreach ($c in @("py -3", "py", "python", "python3")) {
-    cmd /c "$c --version" 2>$null
-    if ($LASTEXITCODE -eq 0) {
-        $PythonCmd = $c
-        $ver = cmd /c "$c --version" 2>&1
-        Write-Host "✅ Python найден: $ver (команда: $c)"
-        break
+foreach ($c in @("python", "py -3.12", "py -3.11", "py -3.10", "py -3", "python3")) {
+    $verOut = cmd /c "$c --version" 2>&1
+    if ($LASTEXITCODE -eq 0 -and $verOut) {
+        # Проверяем, что не 3.14 (whisperx не поддерживает)
+        if ($verOut -match "3\.14\.\d+") {
+            Write-Host "   Пропуск $c — $verOut (whisperx не поддерживает 3.14)"
+            continue
+        }
+        if ($verOut -match "3\.(10|11|12)\.\d+") {
+            $PythonCmd = $c
+            Write-Host "✅ Python найден: $verOut (команда: $c)"
+            break
+        }
+        Write-Host "   Пропуск $c — $verOut (нужен 3.10–3.12)"
     }
 }
 if (-not $PythonCmd) {
-    Write-Host "❌ КРИТИЧЕСКАЯ ОШИБКА: Python не найден!"
-    Write-Host "Установите Python 3.10+ с опцией 'Add Python to PATH' или запустите через 'py' (Python Launcher)."
+    Write-Host "❌ КРИТИЧЕСКАЯ ОШИБКА: Нужен Python 3.10, 3.11 или 3.12 (не 3.14!)."
+    Write-Host "В CI используйте actions/setup-python с python-version: '3.10' и вызывайте скрипт без py -3."
     exit 1
 }
 
@@ -51,27 +58,30 @@ try {
     exit 1
 }
 
-# Устанавливаем зависимости
+# Устанавливаем зависимости (pip может не выйти с ошибкой при несовместимости пакета — проверяем потом)
 Write-Host "📦 Установка зависимостей..."
-try {
-    pip install -r requirements.txt
-    pip install pyinstaller
-    Write-Host "✅ Зависимости установлены"
-} catch {
-    Write-Host "❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось установить зависимости"
-    Write-Host "Ошибка: $_"
+$pipResult = pip install -r requirements.txt 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "❌ КРИТИЧЕСКАЯ ОШИБКА: pip install завершился с кодом $LASTEXITCODE"
+    Write-Host $pipResult
     exit 1
 }
+if ($pipResult -match "requires a different Python|not in ") {
+    Write-Host "❌ КРИТИЧЕСКАЯ ОШИБКА: Одна из зависимостей не поддерживает текущую версию Python"
+    Write-Host $pipResult
+    exit 1
+}
+pip install pyinstaller 2>&1 | Out-Null
+Write-Host "✅ Зависимости установлены"
 
-# Проверяем, что Flask доступен (иначе exe выдаст ModuleNotFoundError: No module named 'flask')
+# Проверяем Flask по коду выхода (PowerShell try/catch не ловит exit code дочернего процесса)
 Write-Host "🔍 Проверка Flask..."
-try {
-    $null = python -c "import flask; import flask_cors; print('OK')"
-    Write-Host "✅ Flask доступен"
-} catch {
-    Write-Host "❌ КРИТИЧЕСКАЯ ОШИБКА: Flask не найден в venv (pip install flask flask-cors)"
+& python -c "import flask; import flask_cors; print('OK')" 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "❌ КРИТИЧЕСКАЯ ОШИБКА: Flask не найден в venv. Установите Python 3.10–3.12 (не 3.14) и перезапустите сборку."
     exit 1
 }
+Write-Host "✅ Flask доступен"
 
 # Проверяем наличие FFmpeg (обязателен для работы)
 Write-Host "🎬 Проверка FFmpeg..."
