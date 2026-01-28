@@ -334,72 +334,58 @@ function startApiServer() {
   
   if (app.isPackaged) {
     // В production режиме (упакованное приложение)
-    // В Electron упакованное приложение имеет структуру:
-    // - app.asar (упакованные файлы)
-    // - resources/ (extraResources)
+    // Python backend может находиться в двух местах:
+    // 1. resources/python-backend/ (extraResources — иногда не копируется NSIS)
+    // 2. resources/app.asar.unpacked/build/python-backend/ (asarUnpack — надёжно)
     
-    // Правильный путь к ресурсам в упакованном приложении
-    let resourcesPath;
+    const resourcesPath = process.resourcesPath || path.join(path.dirname(app.getPath('exe')), 'resources');
     
-    // Пробуем разные варианты путей
-    const possiblePaths = [
-      process.resourcesPath, // Стандартный путь к resources
-      path.join(app.getAppPath(), '..', 'resources'), // Альтернативный путь
-      path.join(path.dirname(app.getPath('exe')), 'resources'), // Рядом с exe
-      path.join(__dirname, '..', '..', 'resources'), // Относительно asar
+    // Вариант 1: extraResources (папка рядом с app.asar)
+    const backendFromExtra = path.join(resourcesPath, 'python-backend', 'api-server', 'api-server.exe');
+    
+    // Вариант 2: asarUnpack (распаковано из app.asar, всегда есть при сборке)
+    const appAsarUnpacked = path.join(resourcesPath, 'app.asar.unpacked');
+    const backendFromAsar = path.join(appAsarUnpacked, 'build', 'python-backend', 'api-server', 'api-server.exe');
+    
+    const candidates = [
+      { path: backendFromExtra, cwd: path.join(resourcesPath, 'python-backend', 'api-server'), name: 'extraResources' },
+      { path: backendFromAsar, cwd: path.join(appAsarUnpacked, 'build', 'python-backend', 'api-server'), name: 'app.asar.unpacked' },
     ];
     
-    // Ищем существующий путь с python-backend
-    resourcesPath = null;
-    for (const testPath of possiblePaths) {
-      if (testPath) {
-        const testBackend = path.join(testPath, 'python-backend', 'api-server', 'api-server.exe');
-        if (fs.existsSync(testBackend)) {
-          resourcesPath = testPath;
-          console.log(`✅ Найден путь к ресурсам: ${resourcesPath}`);
-          break;
-        }
+    let found = null;
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate.path)) {
+        found = candidate;
+        console.log(`✅ Найден Python backend (${candidate.name}): ${candidate.path}`);
+        break;
       }
+      console.log(`   Проверка ${candidate.name}: ${candidate.path} — ${fs.existsSync(candidate.path) ? 'есть' : 'нет'}`);
     }
     
-    // Если не нашли, используем стандартный
-    if (!resourcesPath) {
-      resourcesPath = process.resourcesPath || path.join(app.getAppPath(), '..', 'resources');
-      console.log(`⚠️ Используем стандартный путь к ресурсам: ${resourcesPath}`);
-    }
-    
-    // Проверяем наличие упакованного Python backend
-    const packagedBackend = path.join(resourcesPath, 'python-backend', 'api-server', 'api-server.exe');
-    
-    console.log(`🔍 Проверка упакованного backend: ${packagedBackend}`);
-    console.log(`   Существует: ${fs.existsSync(packagedBackend)}`);
-    
-    if (fs.existsSync(packagedBackend)) {
-      // Используем упакованный Python backend
-      pythonPath = packagedBackend;
-      apiPath = ''; // Не нужен, так как это уже исполняемый файл
-      cwd = path.join(resourcesPath, 'python-backend', 'api-server');
-      console.log('✅ Используем упакованный Python backend');
+    if (found) {
+      pythonPath = found.path;
+      apiPath = '';
+      cwd = found.cwd;
     } else {
-      // В упакованном приложении НЕ ДОЛЖНО быть fallback на системный Python!
-      // Это критическая ошибка сборки
+      // Оба варианта не найдены — критическая ошибка сборки
       console.error('❌ КРИТИЧЕСКАЯ ОШИБКА: Упакованный Python backend не найден!');
-      console.error(`   Ожидаемый путь: ${packagedBackend}`);
-      console.error(`   Проверяемые пути: ${possiblePaths.join(', ')}`);
+      console.error(`   Проверено: ${backendFromExtra}`);
+      console.error(`   Проверено: ${backendFromAsar}`);
       
-      // Показываем детальную ошибку
       const { dialog } = require('electron');
       dialog.showErrorBox(
         'Критическая ошибка: Python backend не найден',
         `Упакованный Python backend не найден в приложении.\n\n` +
-        `Ожидаемый путь: ${packagedBackend}\n\n` +
+        `Проверены пути:\n` +
+        `1. ${backendFromExtra}\n` +
+        `2. ${backendFromAsar}\n\n` +
         `Это означает, что приложение было собрано некорректно.\n\n` +
         `Пожалуйста:\n` +
         `1. Переустановите приложение из официального источника\n` +
         `2. Если проблема сохраняется, сообщите разработчикам\n\n` +
         `Приложение не может работать без Python backend.`
       );
-      return; // Не запускаем сервер
+      return;
     }
   } else {
     // В режиме разработки

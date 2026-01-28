@@ -38,6 +38,10 @@
       "buildResources": "build"
     },
     "asar": true,
+    "asarUnpack": [
+      "build/python-backend/**/*",
+      "build/ffmpeg/**/*"
+    ],
     "files": [
       "build/**/*",
       "electron/**/*",

@@ -13,10 +13,10 @@ torchaudio
 python-dotenv
 requests
 deep-translator
-# NumPy: WhisperX требует numpy>=2.1.0
+# NumPy: WhisperX требует numpy>=2.0.2
 # После установки numpy 2.x нужно переустановить scipy и sklearn:
 # pip install --force-reinstall scipy scikit-learn
-numpy>=2.1.0
+numpy>=2.0.2,<2.1.0
 # Voice Cloning (Coqui XTTS v2)
 # Примечание: TTS требует Python 3.10+
 # Если Python < 3.10, используйте: brew install python@3.11
