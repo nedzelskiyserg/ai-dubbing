@@ -685,8 +685,8 @@ function checkApiServer(port) {
   });
 }
 
-// Ждём появления файла с портом от backend (макс. 10 с — .exe на Windows может долго стартовать)
-function waitForPortFile(filePath, maxWaitMs = 10000) {
+// Ждём появления файла с портом от backend (макс. 60 с — импорты torch/whisperx в exe занимают 15–30 с)
+function waitForPortFile(filePath, maxWaitMs = 60000) {
   logDiag('waitForPortFile: начало', { filePath, maxWaitMs });
   return new Promise((resolve) => {
     const start = Date.now();
@@ -787,8 +787,8 @@ app.whenReady().then(async () => {
     }
     try {
       await new Promise(r => setTimeout(r, 400));
-      console.log('⏳ Ожидание готовности API сервера...');
-      await waitForApiServer(40, 500);
+      console.log('⏳ Ожидание готовности API сервера (до ~30 с после появления порта)...');
+      await waitForApiServer(60, 500);
       console.log('✅ API сервер успешно запущен и готов к работе');
     } catch (error) {
       const logPath = app.isPackaged ? getDiagnosticLogPath() : '';

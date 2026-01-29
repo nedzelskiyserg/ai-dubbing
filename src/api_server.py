@@ -86,8 +86,12 @@ def add_log(message):
     if len(processing_state['logs']) > 1000:
         processing_state['logs'] = processing_state['logs'][-1000:]
     
-    # Выводим в консоль терминала (stdout для видимости)
-    print(formatted_message, flush=True)
+    # Выводим в консоль (на Windows cp1252 не кодирует эмодзи — избегаем UnicodeEncodeError)
+    try:
+        print(formatted_message, flush=True)
+    except UnicodeEncodeError:
+        safe = formatted_message.encode(sys.stdout.encoding or 'utf-8', errors='replace').decode(sys.stdout.encoding or 'utf-8')
+        print(safe, flush=True)
     sys.stdout.flush()
 
 @app.route('/api/health', methods=['GET'])
@@ -1160,6 +1164,13 @@ def signal_handler(signum, frame):
     sys.exit(0)
 
 if __name__ == '__main__':
+    # На Windows в exe stdout по умолчанию cp1252 — эмодзи в логах дают UnicodeEncodeError. Включаем UTF-8.
+    if getattr(sys, 'frozen', False) and sys.platform == 'win32':
+        try:
+            sys.stdout.reconfigure(encoding='utf-8')
+            sys.stderr.reconfigure(encoding='utf-8')
+        except Exception:
+            pass
     # Регистрируем обработчики сигналов для принудительного завершения
     # SIGTERM доступен на Unix-системах (Linux, macOS)
     if hasattr(signal, 'SIGTERM'):
