@@ -31,19 +31,18 @@ def get_app_paths():
         if not path.exists():
             path.mkdir(parents=True, exist_ok=True)
     
-    # Также создаем папку models рядом с exe (если запущено из exe и есть права на запись)
+    # Папку models рядом с exe не создаём в Program Files (нет прав на запись). Используем только Документы/.../Models.
     if getattr(sys, 'frozen', False):
-        exe_dir = Path(sys.executable).parent
-        exe_models_dir = exe_dir / "models"
-        # В Program Files нет прав на запись — создаём только если можем, иначе пропускаем
-        try:
-            if not exe_models_dir.exists():
-                exe_models_dir.mkdir(parents=True, exist_ok=True)
-        except (PermissionError, OSError):
-            # В Program Files или другом защищённом месте — не создаём папку рядом с exe
-            # models будут использоваться из Documents/AI Dubbing Studio/Models (уже создано выше)
-            pass
-            
+        exe_dir = Path(sys.executable).resolve().parent
+        exe_str = str(exe_dir).lower()
+        # Не вызываем mkdir в защищённых путях (Program Files и т.п.)
+        if "program files" not in exe_str and "program files (x86)" not in exe_str:
+            try:
+                exe_models_dir = exe_dir / "models"
+                if not exe_models_dir.exists():
+                    exe_models_dir.mkdir(parents=True, exist_ok=True)
+            except (PermissionError, OSError):
+                pass
     return paths
 
 def open_folder(path):
