@@ -10,14 +10,30 @@ APP_NAME = "AI Dubbing Studio"
 def get_app_paths():
     """
     Возвращает словарь с путями к рабочим папкам.
-    Автоматически определяет 'Документы' пользователя.
+    В режиме разработки: Документы/AI Dubbing Studio.
+    В собранном приложении (frozen): путь установки или %LOCALAPPDATA%, чтобы не зависеть от «локального» пути разработчика.
     """
-    # Получаем домашнюю директорию пользователя (~/)
     home_dir = Path.home()
-    
-    # Основная папка в Документах
     base_dir = home_dir / "Documents" / APP_NAME
-    
+
+    # Собранное приложение (exe/app): данные рядом с программой или в стандартной папке приложения
+    if getattr(sys, 'frozen', False):
+        exe_dir = Path(sys.executable).resolve().parent
+        exe_str = str(exe_dir).lower()
+        if platform.system() == 'Windows':
+            # В Program Files писать нельзя — используем %LOCALAPPDATA%\AI Dubbing Studio
+            if "program files" in exe_str or "program files (x86)" in exe_str:
+                local_appdata = os.environ.get('LOCALAPPDATA')
+                if not local_appdata:
+                    local_appdata = str(home_dir / 'AppData' / 'Local')
+                base_dir = Path(local_appdata) / APP_NAME
+            else:
+                # Установка не в Program Files (например, в папку пользователя) — данные рядом с exe
+                base_dir = exe_dir
+        else:
+            # macOS/Linux: можно оставить Documents или использовать рядом с .app
+            base_dir = home_dir / "Documents" / APP_NAME
+
     paths = {
         "base": base_dir,
         "downloads": base_dir / "Downloads",
@@ -29,20 +45,11 @@ def get_app_paths():
     # Создаем папки, если их нет
     for key, path in paths.items():
         if not path.exists():
-            path.mkdir(parents=True, exist_ok=True)
-    
-    # Папку models рядом с exe не создаём в Program Files (нет прав на запись). Используем только Документы/.../Models.
-    if getattr(sys, 'frozen', False):
-        exe_dir = Path(sys.executable).resolve().parent
-        exe_str = str(exe_dir).lower()
-        # Не вызываем mkdir в защищённых путях (Program Files и т.п.)
-        if "program files" not in exe_str and "program files (x86)" not in exe_str:
             try:
-                exe_models_dir = exe_dir / "models"
-                if not exe_models_dir.exists():
-                    exe_models_dir.mkdir(parents=True, exist_ok=True)
+                path.mkdir(parents=True, exist_ok=True)
             except (PermissionError, OSError):
                 pass
+
     return paths
 
 def open_folder(path):
