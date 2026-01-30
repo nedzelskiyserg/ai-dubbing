@@ -69,5 +69,21 @@ def open_folder(path):
     except Exception as e:
         print(f"Не удалось открыть папку: {e}")
 
+def resolve_path_for_win(path: str) -> str:
+    """
+    На Windows при длине пути > 260 символов os.path.exists и открытие файла
+    могут падать. Префикс \\?\ включает поддержку длинных путей.
+    На остальных ОС возвращает путь как есть.
+    """
+    if platform.system() != 'Windows':
+        return path
+    path = os.path.abspath(path)
+    if path.startswith('\\\\?\\'):
+        return path
+    if path.startswith('\\\\'):
+        return '\\\\?\\UNC\\' + path[2:]
+    return '\\\\?\\' + path
+
+
 # Инициализируем пути при импорте
 APP_PATHS = get_app_paths()

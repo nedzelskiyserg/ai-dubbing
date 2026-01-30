@@ -9,6 +9,8 @@ import traceback
 from typing import Optional, Callable, List, Dict
 import torch
 
+from core.config import resolve_path_for_win
+
 # Подавляем лишние предупреждения
 warnings.filterwarnings('ignore')
 
@@ -145,7 +147,9 @@ class Transcriber:
         """
         Запуск полного пайплайна.
         """
-        if not os.path.exists(audio_path):
+        # На Windows длинные пути (>260 символов) требуют префикса \\?\ для os.path.exists и открытия файла
+        resolved_path = resolve_path_for_win(audio_path)
+        if not os.path.exists(resolved_path):
             raise FileNotFoundError(f"Файл не найден: {audio_path}")
 
         # Импортируем внутри метода, чтобы не грузить память при старте приложения
@@ -180,7 +184,7 @@ class Transcriber:
             self._log(f"⚙️ Параметры транскрипции: batch_size={batch_size}, chunk_size=10 (точные тайминги)")
             
             result = model.transcribe(
-                audio_path,
+                resolved_path,
                 batch_size=batch_size,
                 chunk_size=10  # Критично: меньший размер чанка = более точные тайминги для alignment
             )
@@ -225,7 +229,7 @@ class Transcriber:
                     result["segments"],
                     align_model,
                     align_metadata,
-                    audio_path,
+                    resolved_path,
                     device=self.device,
                     return_char_alignments=False
                 )
@@ -307,7 +311,7 @@ class Transcriber:
                 )
                 
                 diarize_segments = diarize_model(
-                    audio_path,
+                    resolved_path,
                     min_speakers=min_speakers,
                     max_speakers=max_speakers,
                     num_speakers=num_speakers

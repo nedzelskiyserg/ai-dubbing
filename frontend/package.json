@@ -88,19 +88,12 @@
     "win": {
       "target": [
         {
-          "target": "portable",
-          "arch": ["x64"]
-        },
-        {
           "target": "nsis",
           "arch": ["x64"]
         }
       ],
       "icon": "build/icon.ico",
       "requestedExecutionLevel": "asInvoker"
-    },
-    "portable": {
-      "artifactName": "${productName}-${version}-${arch}-Portable.${ext}"
     },
     "nsis": {
       "oneClick": false,
