@@ -71,18 +71,54 @@ def open_folder(path):
 
 def resolve_path_for_win(path: str) -> str:
     """
-    На Windows при длине пути > 260 символов os.path.exists и открытие файла
-    могут падать. Префикс \\?\ включает поддержку длинных путей.
+    На Windows при длине пути > 260 символов или кириллице в пути
+    os.path.exists может не находить файл. Пробуем:
+    1) префикс \\?\ (длинные пути);
+    2) короткий путь 8.3 (GetShortPathNameW), если файл по-прежнему не найден.
     На остальных ОС возвращает путь как есть.
     """
     if platform.system() != 'Windows':
         return path
     path = os.path.abspath(path)
+    # Сначала пробуем длинный формат
     if path.startswith('\\\\?\\'):
+        long_path = path
+    elif path.startswith('\\\\'):
+        long_path = '\\\\?\\UNC\\' + path[2:]
+    else:
+        long_path = '\\\\?\\' + path
+    if os.path.exists(long_path):
+        return long_path
+    if os.path.exists(path):
         return path
-    if path.startswith('\\\\'):
-        return '\\\\?\\UNC\\' + path[2:]
-    return '\\\\?\\' + path
+    # Запасной вариант: короткий путь 8.3 (работает при кириллице в имени)
+    short_path = _get_short_path_win(long_path)
+    if not short_path:
+        short_path = _get_short_path_win(path)
+    if short_path and os.path.exists(short_path):
+        return short_path
+    return long_path  # вернём длинный, чтобы ошибка "не найден" показывала исходный путь
+
+
+def _get_short_path_win(long_path: str):
+    """Возвращает короткий путь 8.3 для файла/папки на Windows или None."""
+    if platform.system() != 'Windows':
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        buf_size = 0
+        while True:
+            buf = ctypes.create_unicode_buffer(buf_size or 512)
+            needed = kernel32.GetShortPathNameW(long_path, buf, len(buf))
+            if needed == 0:
+                return None
+            if needed <= len(buf):
+                return buf.value
+            buf_size = needed
+    except Exception:
+        return None
 
 
 # Инициализируем пути при импорте
