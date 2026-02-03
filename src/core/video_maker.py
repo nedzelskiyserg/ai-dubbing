@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import List, Dict, Optional, Callable
 from pydub import AudioSegment
 import logging
+from core.config import APP_PATHS
 
 # Пытаемся импортировать moviepy
 MOVIEPY_AVAILABLE = False
@@ -80,7 +81,7 @@ class VideoMaker:
     
     def __init__(
         self,
-        temp_dir: str = "temp",
+        temp_dir: Optional[str] = None,
         progress_callback: Optional[Callable[[str], None]] = None,
         should_stop_callback: Optional[Callable[[], bool]] = None
     ):
@@ -91,8 +92,19 @@ class VideoMaker:
             temp_dir: Директория для временных файлов
             progress_callback: Функция для логирования прогресса
         """
-        self.temp_dir = Path(temp_dir)
-        self.temp_dir.mkdir(parents=True, exist_ok=True)
+        if temp_dir:
+            self.temp_dir = Path(temp_dir)
+        else:
+            self.temp_dir = APP_PATHS['temp']
+            
+        try:
+            self.temp_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            # Fallback to system temp if permissions fail
+            import tempfile
+            self.temp_dir = Path(tempfile.gettempdir()) / "ai_dubbing_temp"
+            self.temp_dir.mkdir(parents=True, exist_ok=True)
+            
         self.progress_callback = progress_callback or (lambda msg: None)
         self.should_stop_callback = should_stop_callback
         

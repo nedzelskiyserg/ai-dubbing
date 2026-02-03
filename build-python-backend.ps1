@@ -105,9 +105,27 @@ foreach ($dll in $dllFiles) {
     $pyinstallerCmd += " --add-binary `"ffmpeg\$($dll.Name);.`""
 }
 
-# Явно подключаем Flask и зависимости (иначе в exe: ModuleNotFoundError: No module named 'flask')
+# Явно подключаем Flask и зависимости
 $pyinstallerCmd += " --hidden-import=flask --hidden-import=flask_cors --hidden-import=werkzeug --hidden-import=werkzeug.serving --hidden-import=jinja2"
-$pyinstallerCmd += " --collect-all flask --collect-all flask_cors --collect-all faster_whisper --collect-all pyannote --hidden-import=whisperx --hidden-import=torch --hidden-import=torchaudio --hidden-import=coqui --hidden-import=moviepy src/api_server.py"
+
+# Оптимизация размера:
+# 1. Убираем тяжелые --collect-all для torch, torchaudio, coqui (используем стандартные хуки PyInstaller)
+# 2. Оставляем --collect-all для капризных библиотек (whisperx, faster_whisper, pyannote)
+# 3. Используем --copy-metadata для библиотек, которым нужны версии/метаданные
+$pyinstallerCmd += " --collect-all faster_whisper --collect-all pyannote --collect-all whisperx"
+$pyinstallerCmd += " --hidden-import=whisperx.asr --hidden-import=whisperx.audio --hidden-import=whisperx.alignment --hidden-import=whisperx.diarize --hidden-import=whisperx.utils"
+$pyinstallerCmd += " --hidden-import=pandas --hidden-import=scipy.signal --hidden-import=torch --hidden-import=torchaudio --hidden-import=coqui --hidden-import=moviepy"
+
+# Копируем метаданные (важно для torch, tqdm, huggingface_hub)
+$pyinstallerCmd += " --copy-metadata=torch --copy-metadata=tqdm --copy-metadata=regex --copy-metadata=requests --copy-metadata=packaging --copy-metadata=filelock --copy-metadata=numpy --copy-metadata=huggingface_hub --copy-metadata=safetensors"
+
+# Добавляем tts_worker.py (запускается через subprocess)
+$pyinstallerCmd += " --add-data `"src/core/tts_worker.py;core`""
+
+# Исключаем ненужные модули для уменьшения размера
+$pyinstallerCmd += " --exclude-module=tkinter --exclude-module=matplotlib --exclude-module=IPython --exclude-module=jupyter --exclude-module=notebook --exclude-module=pytest --exclude-module=unittest --exclude-module=pydoc --exclude-module=doctest"
+
+$pyinstallerCmd += " src/api_server.py"
 
 Write-Host "📝 Команда PyInstaller: $pyinstallerCmd"
 

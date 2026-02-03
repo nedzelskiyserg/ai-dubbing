@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import List, Dict, Optional, Callable
 import torch
 from pydub import AudioSegment
+from core.config import APP_PATHS
 
 # Пытаемся импортировать TTS (поддерживаем и старый TTS, и новый coqui-tts)
 TTS_AVAILABLE = False
@@ -69,12 +70,18 @@ class VoiceCloner:
         # Определяем устройство
         self.device = self._detect_device()
         
-        # Создаем необходимые директории
-        self.voices_dir = Path("voices")
-        self.voices_dir.mkdir(exist_ok=True)
-        
-        self.temp_tts_dir = Path("temp/tts_parts")
-        self.temp_tts_dir.mkdir(parents=True, exist_ok=True)
+        # Создаем необходимые директории (используем безопасные пути из config)
+        self.voices_dir = APP_PATHS['base'] / "voices"
+        try:
+            self.voices_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            self._log(f"⚠️ Ошибка создания папки voices: {e}")
+            
+        self.temp_tts_dir = APP_PATHS['temp'] / "tts_parts"
+        try:
+            self.temp_tts_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            self._log(f"⚠️ Ошибка создания папки temp/tts_parts: {e}")
         
         # Проверяем наличие venv_tts для использования через subprocess
         self.venv_tts_path = self._find_venv_tts()
@@ -522,76 +529,6 @@ class VoiceCloner:
             segments: Список сегментов с ключом "audio_file"
             output_path: Путь для сохранения финального аудио
             original_audio_path: Опционально - путь к исходному аудио (для синхронизации)
-            
-        Returns:
-            Путь к созданному файлу
-        """
-        self._log(f"🎬 Объединение {len(segments)} аудио сегментов...")
-        
-        if not segments:
-            raise ValueError("Нет сегментов для объединения")
-        
-        # Собираем все аудио файлы в правильном порядке
-        audio_segments = []
-        missing_files = []
-        
-        for i, seg in enumerate(segments):
-            audio_file = seg.get("audio_file")
-            if not audio_file or not os.path.exists(audio_file):
-                missing_files.append(i)
-                # Создаем тишину для пропущенных сегментов
-                start = float(seg.get("start", 0))
-                end = float(seg.get("end", start + 1.0))
-                duration_ms = int((end - start) * 1000)
-                silence = AudioSegment.silent(duration=duration_ms)
-                audio_segments.append(silence)
-                self._log(f"⚠️ Сегмент {i}: файл отсутствует, добавлена тишина ({duration_ms}ms)")
-            else:
-                try:
-                    audio = AudioSegment.from_file(audio_file)
-                    audio_segments.append(audio)
-                except Exception as e:
-                    self._log(f"⚠️ Ошибка загрузки сегмента {i}: {e}")
-                    # Добавляем тишину вместо ошибки
-                    start = float(seg.get("start", 0))
-                    end = float(seg.get("end", start + 1.0))
-                    duration_ms = int((end - start) * 1000)
-                    silence = AudioSegment.silent(duration=duration_ms)
-                    audio_segments.append(silence)
-        
-        if missing_files:
-            self._log(f"⚠️ Пропущено файлов: {len(missing_files)}")
-        
-        # Объединяем все сегменты
-        if not audio_segments:
-            raise ValueError("Нет аудио для объединения")
-        
-        self._log(f"🔗 Склейка {len(audio_segments)} сегментов...")
-        final_audio = sum(audio_segments)
-        
-        # Экспортируем финальный файл
-        output_path_obj = Path(output_path)
-        output_path_obj.parent.mkdir(parents=True, exist_ok=True)
-        
-        final_audio.export(str(output_path), format="wav")
-        
-        duration_sec = len(final_audio) / 1000.0
-        self._log(f"✅ Финальное аудио создано: {output_path}")
-        self._log(f"   Длительность: {duration_sec:.1f} секунд")
-        
-        return str(output_path)
-    
-    def merge_audio_segments(
-        self,
-        segments: List[Dict],
-        output_path: str
-    ) -> str:
-        """
-        Объединяет все аудио сегменты в один финальный файл.
-        
-        Args:
-            segments: Список сегментов с ключом "audio_file"
-            output_path: Путь для сохранения финального аудио
             
         Returns:
             Путь к созданному файлу
