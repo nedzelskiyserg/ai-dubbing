@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import List, Dict, Optional, Callable
 from pydub import AudioSegment
 import logging
-from core.config import APP_PATHS
+from core.config import APP_PATHS, resolve_path_for_win
 
 # Пытаемся импортировать moviepy
 MOVIEPY_AVAILABLE = False
@@ -403,7 +403,10 @@ class VideoMaker:
         Returns:
             Путь к созданному видео файлу
         """
-        if not os.path.exists(video_path):
+        # На Windows длинные/кириллические пути требуют \\?\ или короткого пути 8.3
+        video_path_resolved = resolve_path_for_win(video_path)
+        output_path_resolved = resolve_path_for_win(output_path)
+        if not os.path.exists(video_path_resolved):
             raise FileNotFoundError(f"Видео файл не найден: {video_path}")
         
         if not segments:
@@ -422,7 +425,7 @@ class VideoMaker:
         
         self._log(f"\n🎬 СОЗДАНИЕ ДУБЛИРОВАННОГО ВИДЕО")
         self._log("─" * 50)
-        self._log(f"📹 Исходное видео: {os.path.basename(video_path)}")
+        self._log(f"📹 Исходное видео: {os.path.basename(video_path_resolved)}")
         self._log(f"📊 Сегментов: {len(segments)}")
         
         try:
@@ -450,7 +453,7 @@ class VideoMaker:
                         f"Установите вручную: pip install moviepy"
                     )
             
-            video_clip = VideoFileClip(video_path)
+            video_clip = VideoFileClip(video_path_resolved)
             total_duration = video_clip.duration
             self._log(f"✅ Длительность видео: {total_duration:.1f} секунд")
             
@@ -480,13 +483,13 @@ class VideoMaker:
             
             # ШАГ 4: Экспортируем финальное видео
             self._log(f"\n💾 Шаг 4/4: Экспорт финального видео...")
-            output_path_obj = Path(output_path)
+            output_path_obj = Path(output_path_resolved)
             output_path_obj.parent.mkdir(parents=True, exist_ok=True)
             
             # Экспортируем с настройками качества
             # MoviePy 2.x: write_videofile параметры
             final_video.write_videofile(
-                str(output_path),
+                str(output_path_resolved),
                 codec='libx264',
                 audio_codec='aac',
                 temp_audiofile=str(self.temp_dir / "temp_audio.m4a"),
@@ -504,9 +507,9 @@ class VideoMaker:
                 temp_audio_path.unlink()
             
             self._log(f"\n✅ ДУБЛИРОВАННОЕ ВИДЕО СОЗДАНО!")
-            self._log(f"📄 Файл: {output_path}")
+            self._log(f"📄 Файл: {output_path_resolved}")
             
-            return str(output_path)
+            return str(output_path_resolved)
             
         except ImportError as e:
             error_msg = str(e)
@@ -516,7 +519,7 @@ class VideoMaker:
                 if _install_moviepy():
                     self._log("✅ MoviePy установлен, повторяем попытку создания видео...")
                     # Повторяем весь процесс
-                    return self.make_video(video_path, segments, output_path)
+                    return self.make_video(video_path_resolved, segments, output_path_resolved)
                 else:
                     self._log(f"❌ Не удалось установить MoviePy: {error_msg}")
                     raise ImportError(

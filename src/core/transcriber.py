@@ -164,12 +164,25 @@ class Transcriber:
             # --- ШАГ 1: ТРАНСКРИПЦИЯ ---
             self._log(f"\n🎧 Шаг 1/4: Транскрипция ({self.model_size})...")
             self._log("⏳ Загрузка модели (при первом запуске скачивается с интернета, может занять 5–15 мин)...")
-            model = whisperx.load_model(
-                self.model_size,
-                device=self.device,
-                compute_type=self.compute_type,
-                language=language
-            )
+            # В упакованном билде (PyInstaller) pytorch_lightning + speechbrain вызывают
+            # глубокую рекурсию в inspect.stack() → RecursionError. Временно повышаем лимит.
+            old_limit = getattr(sys, "getrecursionlimit", lambda: 1000)()
+            try:
+                sys.setrecursionlimit(4000)
+            except Exception:
+                pass
+            try:
+                model = whisperx.load_model(
+                    self.model_size,
+                    device=self.device,
+                    compute_type=self.compute_type,
+                    language=language
+                )
+            finally:
+                try:
+                    sys.setrecursionlimit(old_limit)
+                except Exception:
+                    pass
             
             # Проверяем флаг остановки перед транскрипцией
             if self.should_stop_callback and self.should_stop_callback():
