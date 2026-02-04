@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Dubbing Studio — Установка</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1A1A1A;
+      color: #E0E0E0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      overflow: hidden;
+      -webkit-app-region: drag;
+    }
+    .container {
+      width: 520px;
+      padding: 40px;
+      -webkit-app-region: no-drag;
+    }
+    h1 {
+      font-size: 20px;
+      font-weight: 600;
+      color: #FFFFFF;
+      margin-bottom: 8px;
+    }
+    .subtitle {
+      font-size: 13px;
+      color: #888;
+      margin-bottom: 32px;
+    }
+
+    /* Этапы */
+    .steps {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    .step {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .step-icon {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      border: 2px solid #444;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      flex-shrink: 0;
+      transition: all 0.3s;
+    }
+    .step.active .step-icon  { border-color: #4FC3F7; background: rgba(79,195,247,0.15); color: #4FC3F7; }
+    .step.done   .step-icon  { border-color: #66BB6A; background: rgba(102,187,106,0.15); color: #66BB6A; }
+    .step.error  .step-icon  { border-color: #EF5350; background: rgba(239,83,80,0.15); color: #EF5350; }
+    .step-label {
+      font-size: 14px;
+      color: #AAA;
+      transition: color 0.3s;
+    }
+    .step.active .step-label { color: #FFF; }
+    .step.done   .step-label { color: #66BB6A; }
+    .step.error  .step-label { color: #EF5350; }
+
+    /* Прогресс-бар */
+    .progress-bar-wrap {
+      width: 100%;
+      height: 6px;
+      background: #333;
+      border-radius: 3px;
+      overflow: hidden;
+      margin-bottom: 12px;
+    }
+    .progress-bar {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #4FC3F7, #29B6F6);
+      border-radius: 3px;
+      transition: width 0.3s ease;
+    }
+
+    /* Лог */
+    .log {
+      font-size: 12px;
+      color: #777;
+      height: 18px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      margin-bottom: 24px;
+    }
+
+    /* Кнопки */
+    .actions {
+      display: flex;
+      justify-content: flex-end;
+    }
+    .btn-cancel {
+      padding: 8px 20px;
+      border: 1px solid #555;
+      border-radius: 6px;
+      background: transparent;
+      color: #AAA;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-cancel:hover { border-color: #888; color: #FFF; }
+
+    /* Ошибка */
+    .error-box {
+      display: none;
+      background: rgba(239,83,80,0.1);
+      border: 1px solid rgba(239,83,80,0.3);
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 20px;
+      font-size: 13px;
+      color: #EF9A9A;
+      word-break: break-word;
+      max-height: 120px;
+      overflow-y: auto;
+    }
+    .error-box.visible { display: block; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Первый запуск — установка компонентов</h1>
+    <p class="subtitle">Приложению нужно скачать и установить необходимые компоненты. Это делается один раз.</p>
+
+    <div class="steps">
+      <div class="step" id="step-python">
+        <div class="step-icon">1</div>
+        <div class="step-label">Python 3.10</div>
+      </div>
+      <div class="step" id="step-pip">
+        <div class="step-icon">2</div>
+        <div class="step-label">Менеджер пакетов (pip)</div>
+      </div>
+      <div class="step" id="step-packages">
+        <div class="step-icon">3</div>
+        <div class="step-label">ML-библиотеки (PyTorch, WhisperX, TTS...)</div>
+      </div>
+      <div class="step" id="step-ffmpeg">
+        <div class="step-icon">4</div>
+        <div class="step-label">FFmpeg (обработка видео)</div>
+      </div>
+    </div>
+
+    <div class="progress-bar-wrap">
+      <div class="progress-bar" id="progressBar"></div>
+    </div>
+
+    <div class="log" id="logLine">&nbsp;</div>
+
+    <div class="error-box" id="errorBox"></div>
+
+    <div class="actions">
+      <button class="btn-cancel" id="btnCancel" onclick="window.setupAPI.cancel()">Отмена</button>
+    </div>
+  </div>
+
+  <script>
+    const STEPS = ['python', 'pip', 'packages', 'ffmpeg'];
+    const stepWeights = { python: 5, pip: 5, packages: 80, ffmpeg: 10 };
+    const stepPercents = {};
+    STEPS.forEach(s => { stepPercents[s] = 0; });
+
+    function updateOverallProgress() {
+      let total = 0;
+      for (const s of STEPS) {
+        total += (stepPercents[s] / 100) * stepWeights[s];
+      }
+      document.getElementById('progressBar').style.width = Math.round(total) + '%';
+    }
+
+    function setStepState(stepName, state) {
+      const el = document.getElementById('step-' + stepName);
+      if (!el) return;
+      el.className = 'step ' + state;
+      const icon = el.querySelector('.step-icon');
+      if (state === 'done') icon.textContent = '\u2713';
+      else if (state === 'error') icon.textContent = '\u2717';
+    }
+
+    let currentStep = null;
+
+    window.setupAPI.onProgress((step, percent, message) => {
+      // Обновляем текущий этап
+      if (step !== currentStep) {
+        if (currentStep) setStepState(currentStep, 'done');
+        currentStep = step;
+        setStepState(step, 'active');
+      }
+      stepPercents[step] = percent;
+      updateOverallProgress();
+      document.getElementById('logLine').textContent = message || '';
+    });
+
+    window.setupAPI.onComplete(() => {
+      if (currentStep) setStepState(currentStep, 'done');
+      document.getElementById('progressBar').style.width = '100%';
+      document.getElementById('logLine').textContent = 'Установка завершена! Запуск приложения...';
+      document.getElementById('btnCancel').style.display = 'none';
+    });
+
+    window.setupAPI.onError((errorMessage) => {
+      if (currentStep) setStepState(currentStep, 'error');
+      const errorBox = document.getElementById('errorBox');
+      errorBox.textContent = errorMessage;
+      errorBox.classList.add('visible');
+      document.getElementById('logLine').textContent = 'Ошибка установки. Закройте и попробуйте снова.';
+    });
+  </script>
+</body>
+</html>

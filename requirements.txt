@@ -1,15 +1,13 @@
-nicegui
 flask
 flask-cors
-pywebview
-pyinstaller
 pytubefix
-# Используем версию из git, так как на PyPI устаревшая
-git+https://github.com/m-bain/whisperx.git
+# Используем версию из GitHub (zip), так как на PyPI устаревшая
+# zip-формат не требует установленного git на машине пользователя
+https://github.com/m-bain/whisperx/archive/refs/heads/main.zip
 certifi
 pyannote.audio>=3.1.0
-torch
-torchaudio
+# torch и torchaudio устанавливаются отдельно (CPU-версия) через dependency-manager
+# Не добавляйте их сюда — иначе pip скачает CUDA-версию (~700 МБ вместо ~150 МБ)
 python-dotenv
 requests
 deep-translator

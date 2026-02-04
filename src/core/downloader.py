@@ -32,11 +32,23 @@ fix_ssl()
 
 def get_ffmpeg_path():
     """Ищет FFmpeg в системе (и внутри .app/.exe при сборке)"""
+    # Сначала проверяем переменную окружения FFMPEG_PATH (передаётся из Electron)
+    env_path = os.environ.get('FFMPEG_PATH', '')
+    if env_path and os.path.isfile(env_path):
+        return env_path
+
     is_windows = platform.system() == 'Windows'
     is_frozen = getattr(sys, 'frozen', False)
-    
+
     possible_paths = []
-    
+
+    # Проверяем %LOCALAPPDATA%/AI Dubbing Studio/ffmpeg/ (установлено через dependency-manager)
+    if is_windows:
+        local_appdata = os.environ.get('LOCALAPPDATA', os.path.expanduser('~\\AppData\\Local'))
+        app_ffmpeg = os.path.join(local_appdata, 'AI Dubbing Studio', 'ffmpeg', 'ffmpeg.exe')
+        if os.path.isfile(app_ffmpeg):
+            possible_paths.insert(0, app_ffmpeg)
+
     # Если запущено из exe файла
     if is_frozen:
         # sys._MEIPASS - временная папка, куда PyInstaller распаковывает файлы

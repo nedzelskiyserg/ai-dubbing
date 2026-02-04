@@ -124,21 +124,35 @@ class VideoMaker:
     def _get_ffmpeg_path(self) -> Optional[str]:
         """Ищет путь к FFmpeg"""
         import shutil
+
+        # Сначала проверяем переменную окружения FFMPEG_PATH (передаётся из Electron)
+        env_path = os.environ.get('FFMPEG_PATH', '')
+        if env_path and os.path.isfile(env_path):
+            return env_path
+
+        # Проверяем %LOCALAPPDATA%/AI Dubbing Studio/ffmpeg/ (установлено через dependency-manager)
+        if os.name == 'nt':
+            local_appdata = os.environ.get('LOCALAPPDATA', '')
+            if local_appdata:
+                app_ffmpeg = os.path.join(local_appdata, 'AI Dubbing Studio', 'ffmpeg', 'ffmpeg.exe')
+                if os.path.isfile(app_ffmpeg):
+                    return app_ffmpeg
+
         ffmpeg_path = shutil.which("ffmpeg")
         if ffmpeg_path:
             return ffmpeg_path
-        
+
         # Проверяем стандартные пути
         possible_paths = [
             "/usr/local/bin/ffmpeg",
             "/opt/homebrew/bin/ffmpeg",
             "/usr/bin/ffmpeg",
         ]
-        
+
         for path in possible_paths:
             if os.path.exists(path) and os.access(path, os.X_OK):
                 return path
-        
+
         return None
     
     def _get_audio_duration(self, audio_path: str) -> float:

@@ -38,17 +38,11 @@
       "buildResources": "build"
     },
     "asar": true,
-    "asarUnpack": [
-      "build/python-backend/**/*",
-      "build/ffmpeg/**/*"
-    ],
     "files": [
       "build/**/*",
       "electron/**/*",
       "!electron/**/*.map",
       "node_modules/**/*",
-      "../src/**/*",
-      "../requirements.txt",
       "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
       "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}",
       "!**/node_modules/*.d.ts",
@@ -68,21 +62,11 @@
       {
         "from": "../src",
         "to": "src",
-        "filter": ["**/*"]
+        "filter": ["**/*", "!__pycache__/**"]
       },
       {
         "from": "../requirements.txt",
         "to": "requirements.txt"
-      },
-      {
-        "from": "build/python-backend",
-        "to": "python-backend",
-        "filter": ["**/*", "!.gitkeep"]
-      },
-      {
-        "from": "build/ffmpeg",
-        "to": "ffmpeg",
-        "filter": ["**/*", "!.gitkeep"]
       }
     ],
     "win": {

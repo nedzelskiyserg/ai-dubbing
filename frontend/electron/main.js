@@ -3,8 +3,10 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
+const depManager = require('./dependency-manager');
 
 let mainWindow;
+let setupWindow;
 let apiServer;
 /** Порт API (5001 или следующий свободный). Заполняется после чтения API_PORT_FILE. */
 let apiPort = 5001;
@@ -46,6 +48,41 @@ function logDiag(msg, obj) {
       fs.appendFileSync(logPath, full + '\n', 'utf8');
     }
   } catch (e) {}
+}
+
+/** Читает .env файл и возвращает объект с переменными. Не падает если файла нет. */
+function loadDotEnv() {
+  const candidates = [];
+  if (app.isPackaged) {
+    const resPath = process.resourcesPath || path.join(path.dirname(app.getPath('exe')), 'resources');
+    candidates.push(path.join(resPath, '.env'));
+  }
+  candidates.push(path.join(__dirname, '..', '..', '.env'));
+  candidates.push(path.join(__dirname, '..', '.env'));
+
+  for (const envPath of candidates) {
+    try {
+      if (fs.existsSync(envPath)) {
+        const content = fs.readFileSync(envPath, 'utf8');
+        const vars = {};
+        for (const line of content.split(/\r?\n/)) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith('#')) continue;
+          const eq = trimmed.indexOf('=');
+          if (eq > 0) {
+            const key = trimmed.substring(0, eq).trim();
+            const val = trimmed.substring(eq + 1).trim();
+            vars[key] = val;
+          }
+        }
+        logDiag('Загружены переменные из .env', { path: envPath, keys: Object.keys(vars) });
+        return vars;
+      }
+    } catch (e) {
+      logDiag('Ошибка чтения .env', { path: envPath, error: e.message });
+    }
+  }
+  return {};
 }
 
 // Функция для создания окна
@@ -370,177 +407,93 @@ function createMenu() {
 function startApiServer() {
   // Определяем пути в зависимости от режима (dev/production)
   let apiPath, pythonPath, cwd;
-  
+
   if (app.isPackaged) {
-    // В production режиме (упакованное приложение)
-    // Python backend может находиться в двух местах:
-    // 1. resources/python-backend/ (extraResources — иногда не копируется NSIS)
-    // 2. resources/app.asar.unpacked/build/python-backend/ (asarUnpack — надёжно)
-    
-    const resourcesPath = process.resourcesPath || path.join(path.dirname(app.getPath('exe')), 'resources');
-    
-    // Вариант 1: extraResources (папка рядом с app.asar)
-    const backendFromExtra = path.join(resourcesPath, 'python-backend', 'api-server', 'api-server.exe');
-    
-    // Вариант 2: asarUnpack (распаковано из app.asar, всегда есть при сборке)
-    const appAsarUnpacked = path.join(resourcesPath, 'app.asar.unpacked');
-    const backendFromAsar = path.join(appAsarUnpacked, 'build', 'python-backend', 'api-server', 'api-server.exe');
-    
-    const candidates = [
-      { path: backendFromExtra, cwd: path.join(resourcesPath, 'python-backend', 'api-server'), name: 'extraResources' },
-      { path: backendFromAsar, cwd: path.join(appAsarUnpacked, 'build', 'python-backend', 'api-server'), name: 'app.asar.unpacked' },
-    ];
-    
-    let found = null;
-    for (const candidate of candidates) {
-      if (fs.existsSync(candidate.path)) {
-        found = candidate;
-        console.log(`✅ Найден Python backend (${candidate.name}): ${candidate.path}`);
-        break;
-      }
-      console.log(`   Проверка ${candidate.name}: ${candidate.path} — ${fs.existsSync(candidate.path) ? 'есть' : 'нет'}`);
-    }
-    
-    if (found) {
-      pythonPath = found.path;
-      apiPath = '';
-      cwd = found.cwd;
-    } else {
-      // Оба варианта не найдены — критическая ошибка сборки
-      console.error('❌ КРИТИЧЕСКАЯ ОШИБКА: Упакованный Python backend не найден!');
-      console.error(`   Проверено: ${backendFromExtra}`);
-      console.error(`   Проверено: ${backendFromAsar}`);
-      
+    // В production режиме: используем скачанный Python из %LOCALAPPDATA% + исходники из resources
+    pythonPath = depManager.getPythonExe();
+    const srcPath = depManager.getSrcPath();
+    if (!srcPath) {
+      console.error('❌ КРИТИЧЕСКАЯ ОШИБКА: Исходный код Python (src/) не найден!');
       const { dialog } = require('electron');
       dialog.showErrorBox(
-        'Критическая ошибка: Python backend не найден',
-        `Упакованный Python backend не найден в приложении.\n\n` +
-        `Проверены пути:\n` +
-        `1. ${backendFromExtra}\n` +
-        `2. ${backendFromAsar}\n\n` +
-        `Это означает, что приложение было собрано некорректно.\n\n` +
-        `Пожалуйста:\n` +
-        `1. Переустановите приложение из официального источника\n` +
-        `2. Если проблема сохраняется, сообщите разработчикам\n\n` +
-        `Приложение не может работать без Python backend.`
+        'Критическая ошибка: src/ не найден',
+        'Исходный код Python backend не найден в ресурсах приложения.\n\n' +
+        'Переустановите приложение.'
       );
       return;
     }
+    apiPath = path.join(srcPath, 'api_server.py');
+    cwd = srcPath;
   } else {
     // В режиме разработки
     apiPath = path.join(__dirname, '../../src/api_server.py');
     cwd = path.join(__dirname, '../..');
-    
+
     // Проверяем наличие venv
-    const venvPython = process.platform === 'win32' 
+    const venvPython = process.platform === 'win32'
       ? path.join(__dirname, '../../.venv/Scripts/python.exe')
       : path.join(__dirname, '../../.venv/bin/python3');
-    
+
     pythonPath = process.env.PYTHON_PATH || (fs.existsSync(venvPython) ? venvPython : (process.platform === 'win32' ? 'python' : 'python3'));
   }
-  
+
   // Уникальный файл на каждый запуск — иначе читаем порт от предыдущего процесса
   apiPortFilePath = path.join(os.tmpdir(), `ai-dubbing-api-port-${Date.now()}-${process.pid}.txt`);
+
+  // Путь к FFmpeg — передаём через env
+  const ffmpegPath = app.isPackaged ? depManager.getFFmpegExe() : (process.env.FFMPEG_PATH || '');
+
+  // Загружаем переменные из .env файла (HF_TOKEN и др.)
+  const dotEnvVars = loadDotEnv();
+
   const serverOptions = {
     cwd: cwd,
     stdio: 'pipe',
-    env: Object.assign({}, process.env, { API_PORT_FILE: apiPortFilePath }),
+    env: Object.assign({}, process.env, dotEnvVars, {
+      API_PORT_FILE: apiPortFilePath,
+      FFMPEG_PATH: ffmpegPath,
+      PYTHONUTF8: '1',
+    }),
   };
 
-  // shell: true только для Python-скрипта (python script.py). Для .exe по полному пути — НЕ использовать shell:
-  // иначе путь с пробелами (C:\Program Files\...) разбивается cmd на "C:\Program" и "Files\..."
-  const isExe = pythonPath.toLowerCase().endsWith('.exe');
-  if (process.platform === 'win32' && !isExe) {
-    serverOptions.shell = true;
-  }
-
   logDiag('--- Запуск API сервера ---');
-  logDiag('executable', { pythonPath, apiPath: apiPath || '(exe)', cwd });
+  logDiag('executable', { pythonPath, apiPath, cwd });
   logDiag('API_PORT_FILE (передаётся в env backend)', { apiPortFilePath });
+  logDiag('FFMPEG_PATH', { ffmpegPath });
   logDiag('platform', { platform: process.platform, packaged: app.isPackaged });
-  if (app.isPackaged) {
-    logDiag('packaged: resourcesPath', process.resourcesPath);
-    logDiag('packaged: exe dir', path.dirname(app.getPath('exe')));
-  }
   console.log('🔧 Запуск API сервера:');
   console.log(`   Python: ${pythonPath}`);
-  console.log(`   API Path: ${apiPath || '(исполняемый файл)'}`);
+  console.log(`   API Path: ${apiPath}`);
   console.log(`   CWD: ${cwd}`);
-  console.log(`   API_PORT_FILE: ${apiPortFilePath}`);
+  console.log(`   FFMPEG_PATH: ${ffmpegPath}`);
   console.log(`   Packaged: ${app.isPackaged}`);
-  
+
   // Финальная проверка существования файлов перед запуском
-  if (app.isPackaged) {
-    // В упакованном приложении ДОЛЖЕН быть только .exe файл
-    if (!pythonPath.endsWith('.exe')) {
-      console.error(`❌ КРИТИЧЕСКАЯ ОШИБКА: В упакованном приложении должен использоваться .exe файл!`);
-      const { dialog } = require('electron');
-      dialog.showErrorBox(
-        'Критическая ошибка конфигурации',
-        `В упакованном приложении обнаружена попытка использовать системный Python.\n\n` +
-        `Это недопустимо. Приложение должно использовать упакованный api-server.exe.\n\n` +
-        `Приложение было собрано некорректно.`
-      );
-      return;
-    }
-    
-    if (!fs.existsSync(pythonPath)) {
-      console.error(`❌ Файл не найден: ${pythonPath}`);
-      console.error(`   Абсолютный путь: ${path.resolve(pythonPath)}`);
-      
-      // Показываем детальную информацию для диагностики
-      const { dialog } = require('electron');
-      dialog.showErrorBox(
-        'Ошибка: Python backend не найден',
-        `Упакованный Python backend не найден:\n\n` +
-        `Путь: ${pythonPath}\n` +
-        `Абсолютный путь: ${path.resolve(pythonPath)}\n\n` +
-        `Возможные причины:\n` +
-        `1. Приложение было собрано некорректно\n` +
-        `2. Файлы были удалены или повреждены\n` +
-        `3. Антивирус удалил файл\n\n` +
-        `Решение:\n` +
-        `- Переустановите приложение\n` +
-        `- Проверьте антивирус\n` +
-        `- Скачайте свежую версию`
-      );
-      return;
-    }
-    
-    console.log(`✅ Упакованный backend найден: ${pythonPath}`);
-  } else {
-    // В режиме разработки проверяем оба файла
-    if (!fs.existsSync(apiPath)) {
-      console.error(`❌ Файл не найден: ${apiPath}`);
-      const { dialog } = require('electron');
-      dialog.showErrorBox(
-        'Ошибка запуска',
-        `API сервер не найден:\n${apiPath}\n\n` +
-        `Проверьте, что вы находитесь в правильной директории.`
-      );
-      return;
-    }
-    
-    if (!fs.existsSync(pythonPath)) {
-      console.error(`❌ Python не найден: ${pythonPath}`);
-      const { dialog } = require('electron');
-      dialog.showErrorBox(
-        'Ошибка запуска',
-        `Python не найден:\n${pythonPath}\n\n` +
-        `Установите Python 3.10+ и добавьте его в PATH,\n` +
-        `или создайте виртуальное окружение (.venv).`
-      );
-      return;
-    }
+  if (!fs.existsSync(pythonPath)) {
+    console.error(`❌ Python не найден: ${pythonPath}`);
+    const { dialog } = require('electron');
+    dialog.showErrorBox(
+      'Ошибка: Python не найден',
+      `Python не найден:\n${pythonPath}\n\n` +
+      (app.isPackaged
+        ? 'Зависимости не установлены. Удалите папку "AI Dubbing Studio" из %LOCALAPPDATA% и перезапустите приложение.'
+        : 'Установите Python 3.10+ и добавьте его в PATH,\nили создайте виртуальное окружение (.venv).')
+    );
+    return;
   }
-  
-  if (app.isPackaged && pythonPath.endsWith('.exe')) {
-    logDiag('spawn: упакованный .exe', { cmd: pythonPath, args: [] });
-    apiServer = spawn(pythonPath, [], serverOptions);
-  } else {
-    logDiag('spawn: Python скрипт', { cmd: pythonPath, args: [apiPath] });
-    apiServer = spawn(pythonPath, [apiPath], serverOptions);
+
+  if (!fs.existsSync(apiPath)) {
+    console.error(`❌ Файл не найден: ${apiPath}`);
+    const { dialog } = require('electron');
+    dialog.showErrorBox(
+      'Ошибка запуска',
+      `API сервер не найден:\n${apiPath}\n\nПереустановите приложение.`
+    );
+    return;
   }
+
+  logDiag('spawn: Python скрипт', { cmd: pythonPath, args: [apiPath] });
+  apiServer = spawn(pythonPath, [apiPath], serverOptions);
 
   if (!apiServer) {
     logDiag('ERROR: spawn вернул null');
@@ -760,9 +713,73 @@ ipcMain.handle('clipboard-write-text', (event, text) => {
   return true;
 });
 
-// Когда Electron готов
-app.whenReady().then(async () => {
-  logDiag('--- app.whenReady: проверка API ---');
+// --- Окно установки зависимостей ---
+
+/** Показывает окно установки и запускает процесс. Возвращает Promise<void> по завершении. */
+function runSetupWindow() {
+  return new Promise((resolve, reject) => {
+    setupWindow = new BrowserWindow({
+      width: 580,
+      height: 420,
+      resizable: false,
+      frame: false,
+      backgroundColor: '#1A1A1A',
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        preload: path.join(__dirname, 'preload-setup.js'),
+      },
+      icon: process.platform === 'win32' ? path.join(__dirname, '../build/icon.ico') : undefined,
+    });
+
+    setupWindow.loadFile(path.join(__dirname, 'setup.html'));
+
+    // Обработчик отмены
+    ipcMain.once('setup-cancel', () => {
+      logDiag('Установка отменена пользователем');
+      if (setupWindow && !setupWindow.isDestroyed()) setupWindow.close();
+      app.quit();
+    });
+
+    setupWindow.on('closed', () => { setupWindow = null; });
+
+    setupWindow.once('ready-to-show', () => {
+      setupWindow.show();
+      setupWindow.center();
+
+      // Запускаем установку
+      depManager.installAll((step, percent, message) => {
+        if (setupWindow && !setupWindow.isDestroyed()) {
+          setupWindow.webContents.send('setup-progress', step, percent, message);
+        }
+        logDiag(`setup [${step}] ${percent}%`, { message });
+      }).then(() => {
+        logDiag('Установка зависимостей завершена');
+        if (setupWindow && !setupWindow.isDestroyed()) {
+          setupWindow.webContents.send('setup-complete');
+          // Даём пользователю увидеть сообщение «Установка завершена»
+          setTimeout(() => {
+            if (setupWindow && !setupWindow.isDestroyed()) setupWindow.close();
+            resolve();
+          }, 1500);
+        } else {
+          resolve();
+        }
+      }).catch((err) => {
+        logDiag('Ошибка установки зависимостей', { error: err.message });
+        if (setupWindow && !setupWindow.isDestroyed()) {
+          setupWindow.webContents.send('setup-error', err.message);
+        }
+        // Не reject — пусть пользователь закроет окно вручную
+      });
+    });
+  });
+}
+
+// --- Запуск API сервера и ожидание готовности ---
+
+async function launchBackend() {
+  logDiag('--- launchBackend: проверка API ---');
   const healthResult = await checkApiServer();
   const apiRunning = healthResult.ok;
   logDiag('начальная проверка API', { apiRunning, port: apiPort, statusCode: healthResult.statusCode, error: healthResult.errorMessage });
@@ -787,7 +804,7 @@ app.whenReady().then(async () => {
     }
     try {
       await new Promise(r => setTimeout(r, 400));
-      console.log('⏳ Ожидание готовности API сервера (до ~30 с после появления порта)...');
+      console.log('⏳ Ожидание готовности API сервера...');
       await waitForApiServer(60, 500);
       console.log('✅ API сервер успешно запущен и готов к работе');
     } catch (error) {
@@ -803,11 +820,6 @@ app.whenReady().then(async () => {
         diagnosticLogPath: logPath,
       });
       console.error('❌ Не удалось дождаться запуска API сервера:', error);
-      if (apiServer && !apiServer.killed) {
-        console.log(`   Процесс все еще запущен (PID: ${apiServer.pid})`);
-      } else {
-        console.error('   Процесс API сервера не запущен или завершился');
-      }
       const { dialog } = require('electron');
       const logHint = logPath ? `\n\nПодробный лог: ${logPath}` : '';
       dialog.showErrorBox(
@@ -817,7 +829,6 @@ app.whenReady().then(async () => {
         `1. Сервер еще запускается (подождите несколько секунд)\n` +
         `2. Порт занят другим приложением\n` +
         `3. Ошибка при запуске Python backend\n\n` +
-        `Проверьте логи в консоли для деталей.\n` +
         `Попробуйте перезапустить приложение.${logHint}`
       );
     }
@@ -825,7 +836,41 @@ app.whenReady().then(async () => {
     logDiag('API уже запущен, пропускаем startApiServer');
     console.log('API сервер уже запущен, пропускаем запуск из Electron');
   }
-  
+}
+
+// Когда Electron готов
+app.whenReady().then(async () => {
+  logDiag('--- app.whenReady ---');
+
+  // Проверяем зависимости (Python, pip, пакеты, FFmpeg)
+  const deps = depManager.checkDependencies();
+  logDiag('Состояние зависимостей', deps);
+
+  if (!deps.allOk) {
+    logDiag('Зависимости не установлены — запускаем окно установки');
+    try {
+      await runSetupWindow();
+    } catch (err) {
+      logDiag('Ошибка в runSetupWindow', { error: err.message });
+    }
+    // Перепроверяем после установки
+    const depsAfter = depManager.checkDependencies();
+    if (!depsAfter.allOk) {
+      logDiag('Зависимости всё ещё не установлены после setup', depsAfter);
+      const { dialog } = require('electron');
+      dialog.showErrorBox(
+        'Зависимости не установлены',
+        'Не удалось установить необходимые компоненты.\n\n' +
+        'Проверьте подключение к интернету и перезапустите приложение.'
+      );
+      app.quit();
+      return;
+    }
+  }
+
+  // Запускаем backend
+  await launchBackend();
+
   createWindow();
 
   app.on('activate', () => {
