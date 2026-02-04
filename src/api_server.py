@@ -28,6 +28,9 @@ try:
     from core.voice_cloner import VoiceCloner
     from core.video_maker import VideoMaker
     from core.config import APP_PATHS
+    # Кэш Hugging Face (Whisper, Pyannote) — в папку приложения, чтобы предзагруженная large-v3 находилась
+    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(APP_PATHS["models"]))
+    os.environ.setdefault("HF_HOME", str(APP_PATHS["models"]))
 except Exception:
     # В упакованном exe при падении на импорте пишем лог — пользователь не видит консоль
     if getattr(sys, "frozen", False):

@@ -9,7 +9,7 @@ import traceback
 from typing import Optional, Callable, List, Dict
 import torch
 
-from core.config import resolve_path_for_win
+from core.config import resolve_path_for_win, APP_PATHS
 
 # Подавляем лишние предупреждения
 warnings.filterwarnings('ignore')
@@ -39,7 +39,7 @@ class Transcriber:
     Этапы:
     1. Transcribe (Faster-Whisper) - распознавание текста.
     2. Alignment (Wav2Vec2) - посимвольное выравнивание таймингов.
-    3. Diarization (PyAnnote) - разделение спикеров.
+    3. Diarization (PyAnnote) - разделение спикеров (строго через Pyannote).
     4. Smart Split - нарезка на предложения для дубляжа.
     
     Особенности:
@@ -164,6 +164,7 @@ class Transcriber:
             # --- ШАГ 1: ТРАНСКРИПЦИЯ ---
             self._log(f"\n🎧 Шаг 1/4: Транскрипция ({self.model_size})...")
             self._log("⏳ Загрузка модели (при первом запуске скачивается с интернета, может занять 5–15 мин)...")
+            # Диаризация строго через Pyannote: VAD при загрузке тоже Pyannote.
             # В упакованном билде (PyInstaller) pytorch_lightning + speechbrain вызывают
             # глубокую рекурсию в inspect.stack() → RecursionError. Временно повышаем лимит.
             old_limit = getattr(sys, "getrecursionlimit", lambda: 1000)()
@@ -172,11 +173,14 @@ class Transcriber:
             except Exception:
                 pass
             try:
+                download_root = str(APP_PATHS.get("models", ""))
                 model = whisperx.load_model(
                     self.model_size,
                     device=self.device,
                     compute_type=self.compute_type,
-                    language=language
+                    language=language,
+                    download_root=download_root or None,
+                    vad_method="pyannote",
                 )
             finally:
                 try:

@@ -5,6 +5,7 @@ pytubefix
 # zip-формат не требует установленного git на машине пользователя
 https://github.com/m-bain/whisperx/archive/refs/heads/main.zip
 certifi
+huggingface_hub>=0.20.0
 pyannote.audio>=3.1.0
 # torch и torchaudio устанавливаются отдельно (CPU-версия) через dependency-manager
 # Не добавляйте их сюда — иначе pip скачает CUDA-версию (~700 МБ вместо ~150 МБ)

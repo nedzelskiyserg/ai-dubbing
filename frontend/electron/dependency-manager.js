@@ -295,6 +295,28 @@ async function installAll(onProgress) {
     log('packages', 100, 'Python-пакеты уже установлены');
   }
 
+  // 3.5. Предзагрузка модели Whisper large-v3 (~3 ГБ) в папку приложения
+  const srcPath = getSrcPath();
+  const downloadModelsScript = srcPath ? path.join(srcPath, 'download_models.py') : null;
+  if (downloadModelsScript && fs.existsSync(downloadModelsScript)) {
+    log('models', 0, 'Скачивание модели Whisper large-v3 (~3 ГБ). Это может занять несколько минут...');
+    try {
+      await runProcess(getPythonExe(), [downloadModelsScript], {
+        cwd: srcPath,
+        env: { ...process.env, PYTHONUTF8: '1' },
+        timeout: 600000, // 10 мин
+      }, (line) => {
+        const trimmed = line.trim();
+        if (trimmed) log('models', 50, trimmed);
+      });
+      log('models', 100, 'Модель large-v3 загружена');
+    } catch (err) {
+      log('models', 100, 'Предзагрузка модели пропущена (модель скачается при первом запуске транскрипции). ' + (err.message || ''));
+    }
+  } else {
+    log('models', 100, 'Скрипт предзагрузки не найден, модель скачается при первом запуске');
+  }
+
   // 4. FFmpeg
   if (!status.ffmpegOk) {
     log('ffmpeg', 0, 'Скачивание FFmpeg...');
