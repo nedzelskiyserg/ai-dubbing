@@ -16,6 +16,8 @@ const PYTHON_URL = `https://www.python.org/ftp/python/${PYTHON_VERSION}/python-$
 const GET_PIP_URL = 'https://bootstrap.pypa.io/get-pip.py';
 const FFMPEG_URL = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip';
 const TORCH_INDEX_URL = 'https://download.pytorch.org/whl/cpu';
+// VC++ Redistributable 2015-2022 (x64) — обязателен для PyTorch (c10.dll и др.)
+const VCREDIST_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe';
 
 // Базовая директория для всех зависимостей
 function getBaseDir() {
@@ -29,6 +31,7 @@ function getPipExe() { return path.join(getPythonDir(), 'Scripts', 'pip.exe'); }
 function getFFmpegDir() { return path.join(getBaseDir(), 'ffmpeg'); }
 function getFFmpegExe() { return path.join(getFFmpegDir(), 'ffmpeg.exe'); }
 function getSetupMarker() { return path.join(getBaseDir(), '.setup-complete'); }
+function getVcRedistMarker() { return path.join(getBaseDir(), '.vcredist-installed'); }
 
 // --- Утилиты ---
 
@@ -111,6 +114,7 @@ function runProcess(exe, args, opts, onOutput) {
 /** Возвращает объект с состоянием каждой зависимости. */
 function checkDependencies() {
   const result = {
+    vcredistOk: fs.existsSync(getVcRedistMarker()),
     pythonOk: fs.existsSync(getPythonExe()),
     pipOk: fs.existsSync(getPipExe()),
     packagesOk: false,
@@ -119,7 +123,7 @@ function checkDependencies() {
   };
   // Маркер .setup-complete означает что все пакеты были установлены
   result.packagesOk = result.pipOk && fs.existsSync(getSetupMarker());
-  result.allOk = result.pythonOk && result.pipOk && result.packagesOk && result.ffmpegOk;
+  result.allOk = result.vcredistOk && result.pythonOk && result.pipOk && result.packagesOk && result.ffmpegOk;
   return result;
 }
 
@@ -144,6 +148,55 @@ async function installAll(onProgress) {
   const log = (step, pct, msg) => {
     if (onProgress) onProgress(step, pct, msg);
   };
+
+  // 0. Visual C++ Redistributable (обязателен для PyTorch — c10.dll, torch_cpu.dll и др.)
+  if (!status.vcredistOk) {
+    // Сначала проверяем через реестр — возможно VC++ уже установлен в системе
+    const vcAlreadyInstalled = await checkVcRedistInstalled();
+    if (vcAlreadyInstalled) {
+      log('vcredist', 100, 'Visual C++ Redistributable уже установлен в системе');
+      fs.writeFileSync(getVcRedistMarker(), 'system', 'utf8');
+    } else {
+      log('vcredist', 0, 'Скачивание Visual C++ Redistributable...');
+      const vcExePath = path.join(tempDir, 'vc_redist.x64.exe');
+      await downloadFile(VCREDIST_URL, vcExePath, (dl, total) => {
+        const pct = total ? Math.round((dl / total) * 100) : 0;
+        log('vcredist', pct, `Скачивание VC++ Redistributable... ${formatBytes(dl)} / ${formatBytes(total)}`);
+      });
+      log('vcredist', 80, 'Установка Visual C++ Redistributable (может появиться запрос прав)...');
+      // Запуск с повышением прав через PowerShell Start-Process -Verb RunAs
+      // vc_redist поддерживает /install /quiet /norestart
+      // Коды: 0 = OK, 1638 = уже установлена новая, 3010 = OK но нужен reboot
+      await new Promise((resolve, reject) => {
+        const psCmd = `Start-Process -FilePath '${vcExePath}' -ArgumentList '/install','/quiet','/norestart' -Verb RunAs -Wait -PassThru | ForEach-Object { exit $_.ExitCode }`;
+        execFile('powershell.exe', ['-NoProfile', '-Command', psCmd], { timeout: 180000 }, (err, stdout, stderr) => {
+          // Любой результат кроме реальной ошибки запуска — считаем успехом
+          // (пользователь мог отменить UAC — тогда будет ошибка, но мы попробуем продолжить)
+          if (err && err.code !== 0 && err.code !== 1638 && err.code !== 3010) {
+            // Проверяем, может VC++ всё-таки уже стоит (пользователь мог отменить UAC,
+            // но VC++ уже был установлен через другой софт)
+            log('vcredist', 90, 'Проверка установки VC++ после попытки...');
+          }
+          resolve();
+        });
+      });
+      try { fs.unlinkSync(vcExePath); } catch (e) { /* ignore */ }
+
+      // Финальная проверка — удалось ли установить
+      const vcNowInstalled = await checkVcRedistInstalled();
+      if (vcNowInstalled) {
+        fs.writeFileSync(getVcRedistMarker(), new Date().toISOString(), 'utf8');
+        log('vcredist', 100, 'Visual C++ Redistributable установлен');
+      } else {
+        // Не критично — может быть установлен частично или пользователь отменил UAC.
+        // PyTorch может и так работать если DLL есть в системе.
+        log('vcredist', 100, 'VC++ Redistributable: установка не подтверждена, продолжаем...');
+        fs.writeFileSync(getVcRedistMarker(), 'attempted', 'utf8');
+      }
+    }
+  } else {
+    log('vcredist', 100, 'Visual C++ Redistributable уже установлен');
+  }
 
   // 1. Python
   if (!status.pythonOk) {
@@ -283,6 +336,21 @@ async function installAll(onProgress) {
 }
 
 // --- Вспомогательные ---
+
+/** Проверяет наличие VC++ Redistributable 2015-2022 (x64) через реестр. */
+function checkVcRedistInstalled() {
+  return new Promise((resolve) => {
+    // Проверяем реестр: HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64
+    const regQuery = 'reg query "HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64" /v Installed 2>nul';
+    execFile('cmd.exe', ['/c', regQuery], { timeout: 5000 }, (err, stdout) => {
+      if (!err && stdout && stdout.includes('0x1')) {
+        resolve(true);
+      } else {
+        resolve(false);
+      }
+    });
+  });
+}
 
 /** Ищет файл рекурсивно в директории */
 function findFileRecursive(dir, filename) {

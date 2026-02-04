@@ -138,20 +138,24 @@
     <p class="subtitle">Приложению нужно скачать и установить необходимые компоненты. Это делается один раз.</p>
 
     <div class="steps">
-      <div class="step" id="step-python">
+      <div class="step" id="step-vcredist">
         <div class="step-icon">1</div>
+        <div class="step-label">Visual C++ Redistributable</div>
+      </div>
+      <div class="step" id="step-python">
+        <div class="step-icon">2</div>
         <div class="step-label">Python 3.10</div>
       </div>
       <div class="step" id="step-pip">
-        <div class="step-icon">2</div>
+        <div class="step-icon">3</div>
         <div class="step-label">Менеджер пакетов (pip)</div>
       </div>
       <div class="step" id="step-packages">
-        <div class="step-icon">3</div>
+        <div class="step-icon">4</div>
         <div class="step-label">ML-библиотеки (PyTorch, WhisperX, TTS...)</div>
       </div>
       <div class="step" id="step-ffmpeg">
-        <div class="step-icon">4</div>
+        <div class="step-icon">5</div>
         <div class="step-label">FFmpeg (обработка видео)</div>
       </div>
     </div>
@@ -170,8 +174,8 @@
   </div>
 
   <script>
-    const STEPS = ['python', 'pip', 'packages', 'ffmpeg'];
-    const stepWeights = { python: 5, pip: 5, packages: 80, ffmpeg: 10 };
+    const STEPS = ['vcredist', 'python', 'pip', 'packages', 'ffmpeg'];
+    const stepWeights = { vcredist: 3, python: 4, pip: 3, packages: 80, ffmpeg: 10 };
     const stepPercents = {};
     STEPS.forEach(s => { stepPercents[s] = 0; });
 
