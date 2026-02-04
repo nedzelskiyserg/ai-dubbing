@@ -6,10 +6,77 @@ import re
 import platform
 import warnings
 import traceback
+import datetime
 from typing import Optional, Callable, List, Dict
 import torch
 
 from core.config import resolve_path_for_win
+
+# Глобальный callback для прогресса скачивания модели (используется при патче tqdm)
+_download_progress_callback: Optional[Callable[[int], None]] = None
+
+
+def _patch_hf_download_progress(callback: Optional[Callable[[int], None]]):
+    """Включает вывод прогресса скачивания Hugging Face (только при реальной загрузке)."""
+    global _download_progress_callback
+    _download_progress_callback = callback
+
+
+def _unpatch_hf_download_progress():
+    """Отключает патч и восстанавливает оригинальный tqdm."""
+    global _download_progress_callback
+    _download_progress_callback = None
+    for mod in _hf_tqdm_patched_modules:
+        if hasattr(mod, "_hf_tqdm_orig"):
+            mod.tqdm = mod._hf_tqdm_orig
+    _hf_tqdm_patched_modules.clear()
+
+
+_hf_tqdm_patched_modules = []
+
+
+def _install_hf_tqdm_patch():
+    """Подменяет tqdm в huggingface_hub, чтобы вызывать наш callback при скачивании."""
+    global _hf_tqdm_patched_modules
+    _hf_tqdm_patched_modules.clear()
+    for mod_name in ("huggingface_hub.file_download", "huggingface_hub.hf_hub_download", "huggingface_hub.utils"):
+        try:
+            mod = __import__(mod_name, fromlist=["tqdm"])
+            if not hasattr(mod, "tqdm"):
+                continue
+            orig = mod.tqdm
+            if getattr(orig, "_hf_patched", False):
+                continue
+
+            def _make_wrapper(original_tqdm):
+                def wrapper(*args, **kwargs):
+                    pbar = original_tqdm(*args, **kwargs)
+                    total = getattr(pbar, "total", None) or kwargs.get("total")
+                    if total and total > 0 and _download_progress_callback:
+                        last_pct = [0]
+                        _orig_update = pbar.update
+
+                        def update(n=1):
+                            _orig_update(n)
+                            try:
+                                n_val = getattr(pbar, "n", 0)
+                                pct = min(100, int(100 * n_val / total))
+                                if pct >= last_pct[0] + 5 or pct == 100:
+                                    last_pct[0] = pct
+                                    _download_progress_callback(pct)
+                            except Exception:
+                                pass
+                        pbar.update = update
+                    return pbar
+                return wrapper
+
+            w = _make_wrapper(orig)
+            w._hf_patched = True
+            mod.tqdm = w
+            mod._hf_tqdm_orig = orig
+            _hf_tqdm_patched_modules.append(mod)
+        except Exception:
+            continue
 
 # Подавляем лишние предупреждения
 warnings.filterwarnings('ignore')
@@ -90,6 +157,14 @@ class Transcriber:
         self._log("⚠️ GPU не обнаружен. Используется CPU.")
         return "cpu", "float32"  # Используем float32 и для других CPU систем
 
+    def _log_download_progress(self, pct: int):
+        """Формат прогресса скачивания модели: [HH:MM:SS] ↳ |███████-------------| 37%"""
+        bar_length = 20
+        filled = int(bar_length * pct // 100)
+        bar = "█" * filled + "-" * (bar_length - filled)
+        ts = datetime.datetime.now().strftime("%H:%M:%S")
+        self._log(f"[{ts}] ↳ |{bar}| {pct}%")
+
     def _cleanup_memory(self):
         """Очистка памяти от загруженных нейросетей"""
         gc.collect()
@@ -163,13 +238,21 @@ class Transcriber:
             
             # --- ШАГ 1: ТРАНСКРИПЦИЯ ---
             self._log(f"\n🎧 Шаг 1/4: Транскрипция ({self.model_size})...")
-            
-            model = whisperx.load_model(
-                self.model_size,
-                device=self.device,
-                compute_type=self.compute_type,
-                language=language
-            )
+            # Включаем вывод прогресса скачивания модели (только при реальной загрузке)
+            _patch_hf_download_progress(self._log_download_progress)
+            try:
+                _install_hf_tqdm_patch()
+            except Exception:
+                pass
+            try:
+                model = whisperx.load_model(
+                    self.model_size,
+                    device=self.device,
+                    compute_type=self.compute_type,
+                    language=language
+                )
+            finally:
+                _unpatch_hf_download_progress()
             
             # Проверяем флаг остановки перед транскрипцией
             if self.should_stop_callback and self.should_stop_callback():
