@@ -431,70 +431,46 @@ class Translator:
     def _translate_with_fallback(self, text: str, source_lang: str, target_lang: str) -> str:
         """
         Переводит текст с помощью лучшего доступного метода.
-        Приоритет: DeepL > LibreTranslate > MyMemory > Google Translate
-        
-        Args:
-            text: Текст для перевода
-            source_lang: Исходный язык
-            target_lang: Целевой язык
-            
-        Returns:
-            Переведенный текст
+        Приоритет: DeepL > LibreTranslate > MyMemory > Google Translate > googletrans.
+        Если все методы недоступны — возвращает исходный текст (пайплайн не прерывается).
         """
-        # Пробуем провайдеры в порядке качества
         providers = [
             ("DeepL", self._translate_with_deepl),
             ("LibreTranslate", self._translate_with_libretranslate),
             ("MyMemory", self._translate_with_mymemory),
             ("Google Translate", self._translate_with_google),
         ]
-        
-        last_error = None
         errors_list = []
         for provider_name, translate_func in providers:
-            try:
-                result = translate_func(text, source_lang, target_lang)
-                if result and result.strip():
-                    if provider_name != "Google Translate":  # Логируем только качественные провайдеры
-                        logger.debug(f"✅ Использован {provider_name}")
-                    return result
-                else:
-                    error_msg = f"{provider_name} вернул пустой результат"
-                    logger.debug(f"⚠️ {error_msg}")
-                    errors_list.append(error_msg)
-            except Exception as e:
-                last_error = e
-                error_msg = str(e)
-                logger.debug(f"⚠️ {provider_name} недоступен: {error_msg}")
-                errors_list.append(f"{provider_name}: {error_msg}")
+            for attempt in range(2):  # до 2 попыток с задержкой
+                try:
+                    result = translate_func(text, source_lang, target_lang)
+                    if result and result.strip():
+                        return result
+                    errors_list.append(f"{provider_name} вернул пустой результат")
+                except Exception as e:
+                    errors_list.append(f"{provider_name}: {str(e)[:80]}")
+                if attempt == 0:
+                    time.sleep(0.5)
                 continue
-        
-        # Если ничего не сработало, пробуем использовать googletrans как последний резерв
+            time.sleep(0.3)
+
+        # Последний резерв: googletrans
         try:
             from googletrans import Translator as GoogleTrans
-            translator = GoogleTrans()
-            result = translator.translate(text, src=source_lang, dest=target_lang)
-            if result and result.text and result.text.strip():
-                logger.debug("✅ Использован googletrans (резервный метод)")
-                return result.text
-        except ImportError:
-            logger.debug("⚠️ googletrans не установлен")
+            trans = GoogleTrans()
+            result = trans.translate(text, src=source_lang, dest=target_lang)
+            if result and getattr(result, "text", None) and str(result.text).strip():
+                return str(result.text).strip()
         except Exception as e:
-            error_msg = str(e)
-            logger.debug(f"⚠️ googletrans также недоступен: {error_msg}")
-            errors_list.append(f"googletrans: {error_msg}")
-        
-        # Формируем детальное сообщение об ошибке
-        errors_summary = "; ".join(errors_list[:3])  # Первые 3 ошибки
-        if len(errors_list) > 3:
-            errors_summary += f" ... и еще {len(errors_list) - 3} ошибок"
-        
-        # Если ничего не сработало
-        raise RuntimeError(
-            f"Не удалось выполнить перевод ни одним методом. "
-            f"Ошибки: {errors_summary if errors_summary else 'Все провайдеры вернули None'}. "
-            f"Проверьте подключение к интернету и установите: pip install deep-translator googletrans==4.0.0rc1"
+            errors_list.append(f"googletrans: {str(e)[:80]}")
+
+        # Ни один провайдер не сработал — возвращаем исходный текст, пайплайн не падает
+        logger.warning(
+            "Перевод недоступен (сеть/лимиты?), оставляем оригинал. Ошибки: %s",
+            "; ".join(errors_list[:4]) + (" ..." if len(errors_list) > 4 else ""),
         )
+        return text
     
     def _detect_language(self, segments: List[Dict]) -> str:
         """

@@ -72,12 +72,17 @@ logger = logging.getLogger(__name__)
 class VideoMaker:
     """
     Класс для сборки финального дублированного видео.
-    
+
     Обрабатывает:
-    - Сжатие TTS аудио до нужной длительности (atempo фильтр)
+    - Минимальное ускорение TTS аудио (только до 1.10x, если необходимо)
+    - НИКОГДА не замедляет аудио (это ухудшает качество)
     - Сборку временной линии из всех сегментов
     - Замену аудио дорожки в оригинальном видео
     """
+
+    # Профессиональные ограничения для качества дубляжа
+    MAX_ATEMPO_SPEED = 1.10  # Максимальное ускорение atempo (минимальное влияние на качество)
+    MIN_ATEMPO_SPEED = 1.0   # Никогда не замедляем!
     
     def __init__(
         self,
@@ -207,100 +212,101 @@ class VideoMaker:
     ) -> str:
         """
         Подгоняет аудио к заданной длительности используя FFmpeg atempo фильтр.
-        
+
+        ПРОФЕССИОНАЛЬНЫЕ ПРАВИЛА:
+        - Никогда не замедляем аудио (ухудшает качество)
+        - Ускоряем максимум до 1.10x (минимальное влияние на качество)
+        - Если аудио слишком длинное — обрезаем конец (лучше чем сильное ускорение)
+
         Args:
             audio_path: Путь к исходному аудио файлу
             target_duration_sec: Целевая длительность в секундах
             segment_index: Индекс сегмента (для имени временного файла)
-            
+
         Returns:
             Путь к обработанному аудио файлу (или исходному, если изменение не требуется)
         """
         if not os.path.exists(audio_path):
             self._log(f"❌ Файл не найден: {audio_path}")
             return audio_path
-        
+
         # Получаем текущую длительность
         current_duration = self._get_audio_duration(audio_path)
-        
+
         if current_duration <= 0:
             self._log(f"⚠️ Не удалось определить длительность {audio_path}")
             return audio_path
-        
+
         # Вычисляем фактор скорости
         speed_factor = current_duration / target_duration_sec
-        
+
         # Если аудио уже короче или равно целевой длительности - не изменяем
         if speed_factor <= 1.0:
-            self._log(f"   Сегмент {segment_index}: аудио уже подходит ({current_duration:.2f}s <= {target_duration_sec:.2f}s)")
+            self._log(f"   Сегмент {segment_index}: ✓ аудио подходит ({current_duration:.2f}s ≤ {target_duration_sec:.2f}s)")
             return audio_path
-        
-        self._log(f"   Сегмент {segment_index}: сжатие {current_duration:.2f}s → {target_duration_sec:.2f}s (фактор: {speed_factor:.2f}x)")
-        
+
         # Проверяем наличие FFmpeg
         ffmpeg_path = self._get_ffmpeg_path()
         if not ffmpeg_path:
-            self._log(f"❌ FFmpeg не найден! Невозможно сжать аудио.")
+            self._log(f"❌ FFmpeg не найден! Невозможно обработать аудио.")
             return audio_path
-        
-        # Создаем цепочку atempo фильтров
-        # atempo работает в диапазоне 0.5-2.0
-        atempo_filters = []
-        remaining_factor = speed_factor
-        
-        while remaining_factor > 1.0:
-            if remaining_factor <= 2.0:
-                # Один фильтр достаточен
-                atempo_filters.append(f"atempo={remaining_factor:.3f}")
-                break
-            else:
-                # Нужна цепочка: применяем максимальный фактор 2.0
-                atempo_filters.append("atempo=2.0")
-                remaining_factor = remaining_factor / 2.0
-        
-        # Если остался фактор < 1.0, это ошибка (не должно быть)
-        if remaining_factor < 1.0:
-            self._log(f"⚠️ Ошибка вычисления фактора: {remaining_factor}")
-            return audio_path
-        
-        # Объединяем фильтры
-        filter_chain = ",".join(atempo_filters)
-        
+
         # Создаем путь для обработанного файла
         processed_path = self.processed_audio_dir / f"segment_{segment_index:04d}_processed.wav"
-        
+
+        # Профессиональный подход: ограничиваем ускорение до MAX_ATEMPO_SPEED
+        effective_speed = min(speed_factor, self.MAX_ATEMPO_SPEED)
+
+        # Если требуется слишком сильное ускорение — сначала ускоряем на MAX, потом обрежем
+        need_trim = speed_factor > self.MAX_ATEMPO_SPEED
+
+        if need_trim:
+            # Ускоряем на максимум, потом обрежем лишнее
+            accelerated_duration = current_duration / self.MAX_ATEMPO_SPEED
+            trim_amount = accelerated_duration - target_duration_sec
+            self._log(f"   Сегмент {segment_index}: ⚠️ слишком длинный! Ускорение {self.MAX_ATEMPO_SPEED:.2f}x + обрезка {trim_amount:.2f}s")
+        else:
+            self._log(f"   Сегмент {segment_index}: ускорение {current_duration:.2f}s → {target_duration_sec:.2f}s ({effective_speed:.2f}x)")
+
         try:
-            # Запускаем FFmpeg для сжатия аудио
+            # Формируем фильтр atempo (работает в диапазоне 0.5-2.0, наш MAX <= 1.15)
+            filter_chain = f"atempo={effective_speed:.3f}"
+
+            # Если нужна обрезка — добавляем trim фильтр
+            if need_trim:
+                # Обрезаем до целевой длительности после ускорения
+                filter_chain = f"atempo={self.MAX_ATEMPO_SPEED:.3f},atrim=0:{target_duration_sec:.3f}"
+
+            # Запускаем FFmpeg
             cmd = [
                 ffmpeg_path,
                 "-i", audio_path,
                 "-af", filter_chain,
-                "-y",  # Перезаписать выходной файл
+                "-y",
                 str(processed_path)
             ]
-            
-            self._log(f"   🎚️ FFmpeg команда: {' '.join(cmd)}")
-            
+
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=60  # Максимум 60 секунд на обработку
+                timeout=60
             )
-            
+
             if result.returncode != 0:
                 self._log(f"❌ Ошибка FFmpeg: {result.stderr}")
                 return audio_path
-            
+
             # Проверяем результат
             processed_duration = self._get_audio_duration(str(processed_path))
             if processed_duration > 0:
-                self._log(f"   ✅ Обработано: {processed_duration:.2f}s (цель: {target_duration_sec:.2f}s)")
+                status = "✅" if processed_duration <= target_duration_sec * 1.05 else "⚠️"
+                self._log(f"   {status} Результат: {processed_duration:.2f}s (цель: {target_duration_sec:.2f}s)")
                 return str(processed_path)
             else:
                 self._log(f"⚠️ Обработанный файл пуст, используем оригинал")
                 return audio_path
-                
+
         except subprocess.TimeoutExpired:
             self._log(f"❌ Таймаут обработки аудио")
             return audio_path

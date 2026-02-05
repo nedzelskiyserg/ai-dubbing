@@ -1,6 +1,7 @@
 /**
  * Менеджер зависимостей — скачивает и устанавливает Python, pip, пакеты и FFmpeg
- * при первом запуске приложения. Всё ставится в %LOCALAPPDATA%/AI Dubbing Studio/.
+ * при первом запуске приложения.
+ * Пути зависят от ОС: Windows — %LOCALAPPDATA%, macOS — ~/Library/Application Support, Linux — ~/.config.
  */
 const path = require('path');
 const fs = require('fs');
@@ -9,6 +10,10 @@ const https = require('https');
 const http = require('http');
 const { execFile, spawn } = require('child_process');
 const { createWriteStream } = require('fs');
+
+const APP_NAME = 'AI Dubbing Studio';
+const isWindows = process.platform === 'win32';
+const isDarwin = process.platform === 'darwin';
 
 // --- Конфигурация ---
 const PYTHON_VERSION = '3.10.11';
@@ -19,17 +24,29 @@ const TORCH_INDEX_URL = 'https://download.pytorch.org/whl/cpu';
 // VC++ Redistributable 2015-2022 (x64) — обязателен для PyTorch (c10.dll и др.)
 const VCREDIST_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe';
 
-// Базовая директория для всех зависимостей
+// Базовая директория для всех зависимостей (платформо-зависимая)
 function getBaseDir() {
-  const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
-  return path.join(localAppData, 'AI Dubbing Studio');
+  if (isWindows) {
+    const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+    return path.join(localAppData, APP_NAME);
+  }
+  if (isDarwin) {
+    return path.join(os.homedir(), 'Library', 'Application Support', APP_NAME);
+  }
+  return path.join(os.homedir(), '.config', APP_NAME);
 }
 
 function getPythonDir() { return path.join(getBaseDir(), 'python'); }
-function getPythonExe() { return path.join(getPythonDir(), 'python.exe'); }
-function getPipExe() { return path.join(getPythonDir(), 'Scripts', 'pip.exe'); }
+function getPythonExe() {
+  return path.join(getPythonDir(), isWindows ? 'python.exe' : 'bin/python3');
+}
+function getPipExe() {
+  return path.join(getPythonDir(), isWindows ? 'Scripts/pip.exe' : 'bin/pip3');
+}
 function getFFmpegDir() { return path.join(getBaseDir(), 'ffmpeg'); }
-function getFFmpegExe() { return path.join(getFFmpegDir(), 'ffmpeg.exe'); }
+function getFFmpegExe() {
+  return path.join(getFFmpegDir(), isWindows ? 'ffmpeg.exe' : 'ffmpeg');
+}
 function getSetupMarker() { return path.join(getBaseDir(), '.setup-complete'); }
 function getVcRedistMarker() { return path.join(getBaseDir(), '.vcredist-installed'); }
 
@@ -113,15 +130,31 @@ function runProcess(exe, args, opts, onOutput) {
 
 /** Возвращает объект с состоянием каждой зависимости. */
 function checkDependencies() {
+  // macOS/Linux в режиме разработки: Python и FFmpeg берутся из .venv или PATH (main.js), установка не нужна
+  if (!isWindows) {
+    const { app } = require('electron');
+    if (!app.isPackaged) {
+      return {
+        vcredistOk: true,
+        pythonOk: true,
+        pipOk: true,
+        packagesOk: true,
+        ffmpegOk: true,
+        allOk: true,
+      };
+    }
+  }
+
+  // Windows или собранное приложение (packaged)
+  const vcredistOk = isWindows ? fs.existsSync(getVcRedistMarker()) : true;
   const result = {
-    vcredistOk: fs.existsSync(getVcRedistMarker()),
+    vcredistOk,
     pythonOk: fs.existsSync(getPythonExe()),
     pipOk: fs.existsSync(getPipExe()),
     packagesOk: false,
     ffmpegOk: fs.existsSync(getFFmpegExe()),
     allOk: false,
   };
-  // Маркер .setup-complete означает что все пакеты были установлены
   result.packagesOk = result.pipOk && fs.existsSync(getSetupMarker());
   result.allOk = result.vcredistOk && result.pythonOk && result.pipOk && result.packagesOk && result.ffmpegOk;
   return result;
@@ -138,16 +171,24 @@ function checkDependencies() {
  * @returns {Promise<void>}
  */
 async function installAll(onProgress) {
+  const log = (step, pct, msg) => {
+    if (onProgress) onProgress(step, pct, msg);
+  };
+
+  // Установка через этот скрипт только для Windows; на macOS/Linux используйте системный Python и FFmpeg
+  if (!isWindows) {
+    log('packages', 100, isDarwin
+      ? 'На macOS используйте Python из .venv или brew (brew install python ffmpeg).'
+      : 'На Linux используйте системный Python и FFmpeg.');
+    return;
+  }
+
   const baseDir = getBaseDir();
   fs.mkdirSync(baseDir, { recursive: true });
 
   const status = checkDependencies();
   const tempDir = path.join(baseDir, '_temp');
   fs.mkdirSync(tempDir, { recursive: true });
-
-  const log = (step, pct, msg) => {
-    if (onProgress) onProgress(step, pct, msg);
-  };
 
   // 0. Visual C++ Redistributable (обязателен для PyTorch — c10.dll, torch_cpu.dll и др.)
   if (!status.vcredistOk) {

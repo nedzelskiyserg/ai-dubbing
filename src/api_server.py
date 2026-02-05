@@ -24,6 +24,7 @@ try:
     from core.downloader import download_video
     from core.transcriber import Transcriber
     from core.translator import Translator
+    from core.smart_translator import SmartTranslator  # Умный перевод с учётом тайминга
     from core.corrector import SpeakerCorrector
     from core.voice_cloner import VoiceCloner
     from core.video_maker import VideoMaker
@@ -285,8 +286,7 @@ def process_youtube_sync(url, quality, options):
             if options.get('translate', False):
                 processing_state['current_step'] = 'translating'
                 processing_state['progress'] = 60
-                add_log("🌍 Запуск перевода...")
-                
+
                 # Проверяем флаг остановки перед переводом
                 if processing_state['should_stop']:
                     add_log("⏹️ Обработка остановлена пользователем")
@@ -294,18 +294,14 @@ def process_youtube_sync(url, quality, options):
                     processing_state['current_step'] = None
                     processing_state['progress'] = 0
                     return
-                
+
                 # Создаем callback для проверки остановки
                 def check_should_stop():
                     return processing_state.get('should_stop', False)
-                
-                translator = Translator(
-                    progress_callback=add_log,
-                    should_stop_callback=check_should_stop
-                )
+
                 target_lang = options.get('target_lang', 'ru')
                 provider = options.get('provider', 'api')
-                
+
                 # Преобразуем target_lang (RUSSIAN -> ru)
                 lang_map = {
                     'RUSSIAN': 'ru',
@@ -315,23 +311,57 @@ def process_youtube_sync(url, quality, options):
                     'GERMAN': 'de'
                 }
                 target_lang_code = lang_map.get(target_lang.upper(), target_lang.lower())
-                
-                try:
-                    translated_segments = translator.translate_segments(
-                        segments,
-                        target_lang=target_lang_code,
-                        source_lang=options.get('language'),
-                        model=options.get('model', 'large-v3'),
-                        use_fallback=(provider == 'api'),
-                        force_fallback=(provider == 'api')
+
+                # Если включено клонирование голоса — используем умный перевод с учётом тайминга
+                use_smart_translation = options.get('voice_cloning', False)
+
+                if use_smart_translation:
+                    add_log("🎯 Запуск УМНОГО перевода (с учётом тайминга для дубляжа)...")
+                    try:
+                        smart_translator = SmartTranslator(
+                            model=options.get('ollama_model', 'qwen2.5:7b'),
+                            progress_callback=add_log,
+                            should_stop_callback=check_should_stop
+                        )
+                        translated_segments = smart_translator.translate_segments(
+                            segments,
+                            target_lang=target_lang_code,
+                            source_lang=options.get('language')
+                        )
+                    except RuntimeError as e:
+                        # Ollama не доступен — fallback на обычный перевод
+                        add_log(f"⚠️ Умный перевод недоступен ({e}), используем обычный...")
+                        use_smart_translation = False
+                    except InterruptedError:
+                        add_log("⏹️ Обработка остановлена пользователем")
+                        processing_state['is_processing'] = False
+                        processing_state['current_step'] = None
+                        processing_state['progress'] = 0
+                        return
+
+                if not use_smart_translation:
+                    add_log("🌍 Запуск перевода (API)...")
+                    translator = Translator(
+                        progress_callback=add_log,
+                        should_stop_callback=check_should_stop
                     )
-                except InterruptedError:
-                    add_log("⏹️ Обработка остановлена пользователем")
-                    processing_state['is_processing'] = False
-                    processing_state['current_step'] = None
-                    processing_state['progress'] = 0
-                    return
-                
+
+                    try:
+                        translated_segments = translator.translate_segments(
+                            segments,
+                            target_lang=target_lang_code,
+                            source_lang=options.get('language'),
+                            model=options.get('model', 'large-v3'),
+                            use_fallback=(provider == 'api'),
+                            force_fallback=(provider == 'api')
+                        )
+                    except InterruptedError:
+                        add_log("⏹️ Обработка остановлена пользователем")
+                        processing_state['is_processing'] = False
+                        processing_state['current_step'] = None
+                        processing_state['progress'] = 0
+                        return
+
                 add_log(f"✅ Перевод завершен")
                 segments = translated_segments
                 processing_state['progress'] = 70
@@ -773,8 +803,7 @@ def process_file_sync(file_path, options):
             if options.get('translate', False):
                 processing_state['current_step'] = 'translating'
                 processing_state['progress'] = 60
-                add_log("🌍 Запуск перевода...")
-                
+
                 # Проверяем флаг остановки перед переводом
                 if processing_state['should_stop']:
                     add_log("⏹️ Обработка остановлена пользователем")
@@ -782,16 +811,11 @@ def process_file_sync(file_path, options):
                     processing_state['current_step'] = None
                     processing_state['progress'] = 0
                     return
-                
+
                 # Создаем callback для проверки остановки
                 def check_should_stop():
                     return processing_state.get('should_stop', False)
-                
-                translator = Translator(
-                    progress_callback=add_log,
-                    should_stop_callback=check_should_stop
-                )
-                
+
                 # Преобразуем target_lang (RUSSIAN -> ru)
                 lang_map = {
                     'RUSSIAN': 'ru',
@@ -802,40 +826,74 @@ def process_file_sync(file_path, options):
                 }
                 target_lang_code = lang_map.get(options.get('target_lang', 'ru').upper(), options.get('target_lang', 'ru').lower())
                 provider = options.get('provider', 'api')
-                
-                # Преобразуем model (LARGE -> large-v3)
-                model_map = {
-                    'Tiny': 'tiny',
-                    'Base': 'base',
-                    'Small': 'small',
-                    'Medium': 'medium',
-                    'LARGE': 'large-v3'
-                }
-                model_size = model_map.get(options.get('model', 'LARGE'), options.get('model', 'large-v3').lower())
-                
+
                 # Преобразуем language для source_lang
                 source_lang = options.get('language')
                 if source_lang and source_lang.upper() == 'AUTO':
                     source_lang = None
                 elif source_lang:
                     source_lang = source_lang.lower()
-                
-                try:
-                    segments = translator.translate_segments(
-                        segments,
-                        target_lang=target_lang_code,
-                        source_lang=source_lang,
-                        model=model_size,
-                        use_fallback=(provider == 'api'),
-                        force_fallback=(provider == 'api')
+
+                # Если включено клонирование голоса — используем умный перевод с учётом тайминга
+                use_smart_translation = options.get('voice_cloning', False)
+
+                if use_smart_translation:
+                    add_log("🎯 Запуск УМНОГО перевода (с учётом тайминга для дубляжа)...")
+                    try:
+                        smart_translator = SmartTranslator(
+                            model=options.get('ollama_model', 'qwen2.5:7b'),
+                            progress_callback=add_log,
+                            should_stop_callback=check_should_stop
+                        )
+                        segments = smart_translator.translate_segments(
+                            segments,
+                            target_lang=target_lang_code,
+                            source_lang=source_lang
+                        )
+                    except RuntimeError as e:
+                        # Ollama не доступен — fallback на обычный перевод
+                        add_log(f"⚠️ Умный перевод недоступен ({e}), используем обычный...")
+                        use_smart_translation = False
+                    except InterruptedError:
+                        add_log("⏹️ Обработка остановлена пользователем")
+                        processing_state['is_processing'] = False
+                        processing_state['current_step'] = None
+                        processing_state['progress'] = 0
+                        return
+
+                if not use_smart_translation:
+                    add_log("🌍 Запуск перевода (API)...")
+                    translator = Translator(
+                        progress_callback=add_log,
+                        should_stop_callback=check_should_stop
                     )
-                except InterruptedError:
-                    add_log("⏹️ Обработка остановлена пользователем")
-                    processing_state['is_processing'] = False
-                    processing_state['current_step'] = None
-                    processing_state['progress'] = 0
-                    return
-                
+
+                    # Преобразуем model (LARGE -> large-v3)
+                    model_map = {
+                        'Tiny': 'tiny',
+                        'Base': 'base',
+                        'Small': 'small',
+                        'Medium': 'medium',
+                        'LARGE': 'large-v3'
+                    }
+                    model_size = model_map.get(options.get('model', 'LARGE'), options.get('model', 'large-v3').lower())
+
+                    try:
+                        segments = translator.translate_segments(
+                            segments,
+                            target_lang=target_lang_code,
+                            source_lang=source_lang,
+                            model=model_size,
+                            use_fallback=(provider == 'api'),
+                            force_fallback=(provider == 'api')
+                        )
+                    except InterruptedError:
+                        add_log("⏹️ Обработка остановлена пользователем")
+                        processing_state['is_processing'] = False
+                        processing_state['current_step'] = None
+                        processing_state['progress'] = 0
+                        return
+
                 add_log(f"✅ Перевод завершен")
                 processing_state['progress'] = 70
                 

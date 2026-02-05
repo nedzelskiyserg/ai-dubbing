@@ -10,13 +10,14 @@ APP_NAME = "AI Dubbing Studio"
 def get_app_paths():
     """
     Возвращает словарь с путями к рабочим папкам.
-    В режиме разработки: Документы/AI Dubbing Studio.
-    В собранном приложении (frozen): путь установки или %LOCALAPPDATA%, чтобы не зависеть от «локального» пути разработчика.
+    В режиме разработки (не frozen): всегда Документы/AI Dubbing Studio на любой ОС.
+    В собранном приложении (frozen): Windows — %LOCALAPPDATA% или рядом с exe;
+    macOS/Linux — Документы или рядом с .app.
     """
     home_dir = Path.home()
     base_dir = home_dir / "Documents" / APP_NAME
 
-    # Собранное приложение (exe/app): данные рядом с программой или в стандартной папке приложения
+    # Собранное приложение (exe/app): пути зависят от ОС
     if getattr(sys, 'frozen', False):
         exe_dir = Path(sys.executable).resolve().parent
         exe_str = str(exe_dir).lower()

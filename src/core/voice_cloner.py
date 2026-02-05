@@ -178,10 +178,10 @@ class VoiceCloner:
             self._log(f"❌ Ошибка загрузки модели XTTS: {e}")
             raise
     
-    def _generate_tts_via_venv(self, text: str, speaker_wav: str, output_path: str, language: str, segment_index: int = None, total_segments: int = None) -> bool:
+    def _generate_tts_via_venv(self, text: str, speaker_wav: str, output_path: str, language: str, segment_index: int = None, total_segments: int = None, tts_speed: float = 1.0) -> bool:
         """
         Генерирует TTS через venv_tts используя subprocess.
-        
+
         Args:
             text: Текст для генерации
             speaker_wav: Референсное аудио
@@ -189,7 +189,8 @@ class VoiceCloner:
             language: Язык
             segment_index: Индекс сегмента (для логирования)
             total_segments: Всего сегментов (для логирования)
-        
+            tts_speed: Скорость речи (1.0 = нормально, до 1.15 для ускорения)
+
         Returns:
             True если успешно, False если ошибка
         """
@@ -212,7 +213,8 @@ class VoiceCloner:
                 "speaker_wav": speaker_wav,
                 "output_path": output_path,
                 "language": language,
-                "model_name": self.model_name
+                "model_name": self.model_name,
+                "tts_speed": tts_speed
             }
             
             # Добавляем информацию о сегменте для логирования в worker
@@ -279,24 +281,24 @@ class VoiceCloner:
     ) -> Dict[str, str]:
         """
         Извлекает референсные аудио для каждого уникального спикера.
-        
-        Ищет сегменты длительностью 3-10 секунд (оптимально для обучения модели спикера).
-        Приоритет: чем больше в этом диапазоне - тем лучше.
-        Если таких нет, берет самый длинный доступный сегмент.
-        
+
+        XTTS v2 работает лучше с референсами 6-12 секунд чистой речи.
+        Стратегия: объединяем несколько коротких сегментов одного спикера,
+        чтобы получить более длинный и качественный референс.
+
         Args:
             audio_path: Путь к исходному аудио файлу
             segments: Список сегментов с информацией о спикерах и таймингах
-            
+
         Returns:
             Словарь {speaker_id: path_to_sample.wav}
         """
         self._log(f"🎯 Извлечение референсных аудио для спикеров...")
-        
+
         if not segments:
             self._log("⚠️ Нет сегментов для обработки")
             return {}
-        
+
         # Загружаем исходное аудио
         try:
             audio = AudioSegment.from_file(audio_path)
@@ -304,7 +306,7 @@ class VoiceCloner:
         except Exception as e:
             self._log(f"❌ Ошибка загрузки аудио: {e}")
             return {}
-        
+
         # Группируем сегменты по спикерам
         speaker_segments = {}
         for seg in segments:
@@ -312,62 +314,151 @@ class VoiceCloner:
             if speaker not in speaker_segments:
                 speaker_segments[speaker] = []
             speaker_segments[speaker].append(seg)
-        
+
         self._log(f"📊 Найдено спикеров: {len(speaker_segments)}")
-        
+
         speaker_samples = {}
-        
+
+        # Оптимальные параметры для XTTS v2
+        MIN_REFERENCE_DURATION = 6.0    # Минимум 6 секунд для хорошего клонирования
+        MAX_REFERENCE_DURATION = 15.0   # Максимум 15 секунд (больше не нужно)
+        IDEAL_SEGMENT_DURATION = (4.0, 12.0)  # Идеальный диапазон одного сегмента
+
         for speaker, segs in speaker_segments.items():
-            # Ищем оптимальный сегмент (3-10 секунд, чем больше - тем лучше)
-            best_seg = None
-            best_duration = 0
-            
-            for seg in segs:
-                start = float(seg.get("start", 0))
-                end = float(seg.get("end", 0))
-                duration = end - start
-                
-                # Оптимальный диапазон для обучения модели спикера: 3-10 секунд
-                # Приоритет: чем больше в этом диапазоне - тем лучше
-                if 3.0 <= duration <= 10.0:
-                    # Если это лучший сегмент в диапазоне (длиннее предыдущего)
-                    if duration > best_duration:
-                        best_seg = seg
-                        best_duration = duration
-                        # Не останавливаемся, продолжаем искать более длинный в диапазоне
-                
-                # Если нет сегментов в оптимальном диапазоне, запоминаем самый длинный
-                elif best_duration == 0 and duration > best_duration:
-                    best_duration = duration
-                    best_seg = seg
-            
-            if best_seg is None:
-                self._log(f"⚠️ Не найдено сегментов для {speaker}")
+            # Сортируем сегменты по длительности (длинные первые)
+            sorted_segs = sorted(
+                segs,
+                key=lambda s: float(s.get("end", 0)) - float(s.get("start", 0)),
+                reverse=True
+            )
+
+            # Стратегия 1: ищем один идеальный сегмент (4-12 секунд)
+            best_single_seg = None
+            for seg in sorted_segs:
+                duration = float(seg.get("end", 0)) - float(seg.get("start", 0))
+                if IDEAL_SEGMENT_DURATION[0] <= duration <= IDEAL_SEGMENT_DURATION[1]:
+                    best_single_seg = seg
+                    break
+
+            if best_single_seg:
+                # Нашли идеальный одиночный сегмент
+                start_ms = int(best_single_seg.get("start", 0) * 1000)
+                end_ms = int(best_single_seg.get("end", 0) * 1000)
+                duration = (end_ms - start_ms) / 1000.0
+
+                try:
+                    sample_audio = audio[start_ms:end_ms]
+                    sample_audio = self._enhance_reference_audio(sample_audio)
+
+                    sample_path = self.voices_dir / f"{speaker}_sample.wav"
+                    sample_audio.export(str(sample_path), format="wav", parameters=["-ar", "22050", "-ac", "1"])
+
+                    speaker_samples[speaker] = str(sample_path)
+                    self._log(f"✅ Референс для {speaker}: {duration:.1f}с (идеальный сегмент)")
+                    continue
+                except Exception as e:
+                    self._log(f"⚠️ Ошибка извлечения сегмента для {speaker}: {e}")
+
+            # Стратегия 2: объединяем несколько сегментов до нужной длины
+            combined_audio = AudioSegment.empty()
+            combined_duration = 0.0
+            segments_used = 0
+
+            for seg in sorted_segs:
+                if combined_duration >= MAX_REFERENCE_DURATION:
+                    break
+
+                start_ms = int(seg.get("start", 0) * 1000)
+                end_ms = int(seg.get("end", 0) * 1000)
+                seg_duration = (end_ms - start_ms) / 1000.0
+
+                # Пропускаем очень короткие сегменты (< 1 сек) - много шума
+                if seg_duration < 1.0:
+                    continue
+
+                try:
+                    seg_audio = audio[start_ms:end_ms]
+
+                    # Добавляем короткую паузу между сегментами
+                    if len(combined_audio) > 0:
+                        combined_audio += AudioSegment.silent(duration=200)  # 200ms пауза
+
+                    combined_audio += seg_audio
+                    combined_duration += seg_duration
+                    segments_used += 1
+                except Exception:
+                    continue
+
+            if combined_duration < 2.0:
+                self._log(f"⚠️ Недостаточно аудио для {speaker} (только {combined_duration:.1f}с)")
                 continue
-            
-            # Извлекаем аудио сегмент
-            start_ms = int(best_seg.get("start", 0) * 1000)
-            end_ms = int(best_seg.get("end", 0) * 1000)
-            
+
+            # Обрезаем если слишком длинный
+            if combined_duration > MAX_REFERENCE_DURATION:
+                combined_audio = combined_audio[:int(MAX_REFERENCE_DURATION * 1000)]
+                combined_duration = MAX_REFERENCE_DURATION
+
             try:
-                sample_audio = audio[start_ms:end_ms]
-                
-                # Сохраняем референсный файл
+                # Улучшаем качество референса
+                combined_audio = self._enhance_reference_audio(combined_audio)
+
                 sample_path = self.voices_dir / f"{speaker}_sample.wav"
-                sample_audio.export(str(sample_path), format="wav")
-                
+                # Экспортируем в формате оптимальном для XTTS: 22050 Hz, mono
+                combined_audio.export(
+                    str(sample_path),
+                    format="wav",
+                    parameters=["-ar", "22050", "-ac", "1"]
+                )
+
                 speaker_samples[speaker] = str(sample_path)
-                
                 self._log(
-                    f"✅ Референс для {speaker}: {best_duration:.1f}с "
-                    f"({sample_path.name})"
+                    f"✅ Референс для {speaker}: {combined_duration:.1f}с "
+                    f"(объединено {segments_used} сегментов)"
                 )
             except Exception as e:
-                self._log(f"❌ Ошибка извлечения аудио для {speaker}: {e}")
+                self._log(f"❌ Ошибка сохранения референса для {speaker}: {e}")
                 continue
-        
+
         self._log(f"🎯 Извлечено референсов: {len(speaker_samples)}/{len(speaker_segments)}")
         return speaker_samples
+
+    def _enhance_reference_audio(self, audio: AudioSegment) -> AudioSegment:
+        """
+        Улучшает качество референсного аудио для лучшего клонирования.
+
+        - Конвертация в моно
+        - Нормализация громкости
+        - Удаление тишины в начале/конце
+        - Компрессия динамического диапазона (опционально)
+        """
+        try:
+            from pydub.effects import normalize, strip_silence, compress_dynamic_range
+
+            # Конвертируем в моно если стерео
+            if audio.channels > 1:
+                audio = audio.set_channels(1)
+
+            # Нормализуем громкость
+            audio = normalize(audio)
+
+            # Удаляем тишину в начале и конце
+            # silence_thresh=-40 dB, оставляем минимум 50ms тишины
+            audio = strip_silence(audio, silence_len=50, silence_thresh=-40, padding=50)
+
+            # Лёгкая компрессия для выравнивания громкости речи
+            # (помогает когда спикер говорит то тихо, то громко)
+            try:
+                audio = compress_dynamic_range(audio, threshold=-20.0, ratio=2.0, attack=5.0, release=50.0)
+            except Exception:
+                pass  # Некоторые версии pydub не поддерживают
+
+            return audio
+        except ImportError:
+            # pydub.effects может быть недоступен
+            return audio
+        except Exception as e:
+            self._log(f"⚠️ Не удалось улучшить референс: {e}")
+            return audio
     
     def generate_dubbing(
         self,
@@ -435,9 +526,10 @@ class VoiceCloner:
             if self.should_stop_callback and self.should_stop_callback():
                 self._log("⏹️ Генерация дубляжа прервана пользователем")
                 raise InterruptedError("Processing stopped by user")
-            
+
             speaker = seg.get("speaker", "SPEAKER_UNKNOWN")
             text = seg.get("text", "").strip()
+            tts_speed = float(seg.get("tts_speed", 1.0))  # Скорость из умного перевода
             
             if not text:
                 self._log(f"⚠️ [{i+1}/{total_segments}] Сегмент {i}: пустой текст, пропускаем")
@@ -475,7 +567,8 @@ class VoiceCloner:
                         output_path=str(output_path),
                         language=target_lang,
                         segment_index=i,
-                        total_segments=total_segments
+                        total_segments=total_segments,
+                        tts_speed=tts_speed
                     )
                     if not success:
                         raise Exception("Ошибка генерации через venv_tts")
