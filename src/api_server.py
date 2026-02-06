@@ -759,27 +759,27 @@ def process_file_sync(file_path, options):
                 m, s = divmod(seconds, 60)
                 h, m = divmod(m, 60)
                 return f"{int(h):02d}:{int(m):02d}:{int(s):02d}"
-            
-                for seg in segments:
-                    # Проверяем флаг остановки в цикле
-                    if processing_state['should_stop']:
-                        add_log("⏹️ Обработка остановлена пользователем")
-                        processing_state['is_processing'] = False
-                        processing_state['current_step'] = None
-                        processing_state['progress'] = 0
-                        return
-                    
-                    speaker = seg.get("speaker", "SPEAKER_UNKNOWN")
-                    
-                    if speaker != current_speaker:
-                        transcript_text += f"\n👤 {speaker} "
-                        current_speaker = speaker
-                    
-                    start_time = format_timestamp(float(seg.get("start", 0)))
-                    end_time = format_timestamp(float(seg.get("end", 0)))
-                    text = seg.get("text", "").strip()
-                    
-                    transcript_text += f"[{start_time} -> {end_time}]: {text}\n"
+
+            for seg in segments:
+                # Проверяем флаг остановки в цикле
+                if processing_state['should_stop']:
+                    add_log("⏹️ Обработка остановлена пользователем")
+                    processing_state['is_processing'] = False
+                    processing_state['current_step'] = None
+                    processing_state['progress'] = 0
+                    return
+
+                speaker = seg.get("speaker", "SPEAKER_UNKNOWN")
+
+                if speaker != current_speaker:
+                    transcript_text += f"\n👤 {speaker} "
+                    current_speaker = speaker
+
+                start_time = format_timestamp(float(seg.get("start", 0)))
+                end_time = format_timestamp(float(seg.get("end", 0)))
+                text = seg.get("text", "").strip()
+
+                transcript_text += f"[{start_time} -> {end_time}]: {text}\n"
             
             transcript_text += "\n" + "=" * 50 + "\n"
             transcript_text += f"📊 СТАТИСТИКА:\n"

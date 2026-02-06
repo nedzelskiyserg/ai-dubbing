@@ -37,18 +37,19 @@ if platform.system() == 'Windows':
     os.symlink = _safe_symlink
 
 # --- ПАТЧ ДЛЯ PyTorch 2.6+ (CRITICAL) ---
-# WhisperX и pyannote используют старый способ загрузки весов.
-# Без этого патча новые версии torch выдают ошибку безопасности.
+# WhisperX и pyannote используют старый способ загрузки весов через pickle.
+# В PyTorch 2.6+ дефолт weights_only=True — без патча модели грузятся некорректно,
+# что приводит к segfault (0xC0000005) при VAD inference на Windows.
+# ВАЖНО: всегда форсируем weights_only=False, даже если аргумент не передан явно.
 try:
     import functools
     original_load = torch.load
-    
+
     @functools.wraps(original_load)
     def patched_load(*args, **kwargs):
-        if 'weights_only' in kwargs:
-            kwargs['weights_only'] = False
+        kwargs['weights_only'] = False
         return original_load(*args, **kwargs)
-        
+
     torch.load = patched_load
 except ImportError:
     pass
@@ -246,6 +247,88 @@ class Transcriber:
         self._log(f"⚠️ Неизвестный код языка для alignment: {lang_code}, используем как есть")
         return lang_code
 
+    def _load_and_transcribe(self, whisperx, audio_path, language, download_root, batch_size):
+        """
+        Загружает модель и выполняет транскрипцию.
+        При краше на CUDA (segfault PyAnnote VAD) — автоматический fallback на CPU.
+        """
+        devices_to_try = [(self.device, self.compute_type)]
+        # Если основной девайс — CUDA, добавляем CPU как fallback
+        if self.device == "cuda":
+            devices_to_try.append(("cpu", "float32"))
+
+        last_error = None
+        for device, compute_type in devices_to_try:
+            if device != self.device:
+                self._log(f"⚠️ Повторная попытка на CPU (fallback после ошибки CUDA)...")
+
+            old_limit = getattr(sys, "getrecursionlimit", lambda: 1000)()
+            try:
+                sys.setrecursionlimit(4000)
+            except Exception:
+                pass
+
+            try:
+                model = whisperx.load_model(
+                    self.model_size,
+                    device=device,
+                    compute_type=compute_type,
+                    language=language,
+                    download_root=download_root or None,
+                    vad_method="pyannote",
+                )
+            except Exception as e:
+                last_error = e
+                self._log(f"⚠️ Ошибка загрузки модели на {device}: {e}")
+                self._cleanup_memory()
+                try:
+                    sys.setrecursionlimit(old_limit)
+                except Exception:
+                    pass
+                continue
+            finally:
+                try:
+                    sys.setrecursionlimit(old_limit)
+                except Exception:
+                    pass
+
+            # Проверяем флаг остановки перед транскрипцией
+            if self.should_stop_callback and self.should_stop_callback():
+                del model
+                self._cleanup_memory()
+                self._log("⏹️ Транскрипция прервана пользователем")
+                raise InterruptedError("Processing stopped by user")
+
+            # КРИТИЧЕСКИ ВАЖНО: Настройки для точных таймингов
+            # chunk_size=10: заставляет Whisper чаще сбрасывать тайминги (по умолчанию 30)
+            self._log(f"⚙️ Параметры: device={device}, compute_type={compute_type}, batch_size={batch_size}, chunk_size=10")
+
+            try:
+                result = model.transcribe(
+                    audio_path,
+                    batch_size=batch_size,
+                    chunk_size=10
+                )
+                # Успешно — обновляем device для остальных шагов (alignment, diarization)
+                self.device = device
+                self.compute_type = compute_type
+                return model, result
+            except Exception as e:
+                last_error = e
+                self._log(f"⚠️ Ошибка транскрипции на {device}: {e}")
+                try:
+                    del model
+                except Exception:
+                    pass
+                self._cleanup_memory()
+                continue
+
+        # Все попытки провалились
+        raise RuntimeError(
+            f"Не удалось выполнить транскрипцию ни на одном устройстве. "
+            f"Последняя ошибка: {last_error}"
+        )
+
     def transcribe_full(
         self,
         audio_path: str,
@@ -289,42 +372,9 @@ class Transcriber:
             # В упакованном билде (PyInstaller) pytorch_lightning + speechbrain вызывают
             # глубокую рекурсию в inspect.stack() → RecursionError. Временно повышаем лимит.
             self._log("⚙️ Инициализация модели...")
-            old_limit = getattr(sys, "getrecursionlimit", lambda: 1000)()
-            try:
-                sys.setrecursionlimit(4000)
-            except Exception:
-                pass
-            try:
-                model = whisperx.load_model(
-                    self.model_size,
-                    device=self.device,
-                    compute_type=self.compute_type,
-                    language=language,
-                    download_root=download_root or None,
-                    vad_method="pyannote",
-                )
-            finally:
-                try:
-                    sys.setrecursionlimit(old_limit)
-                except Exception:
-                    pass
-            
-            # Проверяем флаг остановки перед транскрипцией
-            if self.should_stop_callback and self.should_stop_callback():
-                del model
-                self._cleanup_memory()
-                self._log("⏹️ Транскрипция прервана пользователем")
-                raise InterruptedError("Processing stopped by user")
-            
-            # КРИТИЧЕСКИ ВАЖНО: Настройки для точных таймингов
-            # chunk_size=10: заставляет Whisper чаще сбрасывать тайминги (по умолчанию 30)
-            # Это предотвращает сжатие длинных сегментов и улучшает точность alignment
-            self._log(f"⚙️ Параметры транскрипции: batch_size={batch_size}, chunk_size=10 (точные тайминги)")
-            
-            result = model.transcribe(
-                resolved_path,
-                batch_size=batch_size,
-                chunk_size=10  # Критично: меньший размер чанка = более точные тайминги для alignment
+
+            model, result = self._load_and_transcribe(
+                whisperx, resolved_path, language, download_root, batch_size
             )
             
             # Проверяем флаг остановки после транскрипции
