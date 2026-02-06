@@ -3,9 +3,12 @@ import os
 import sys
 import gc
 import re
+import shutil
 import platform
 import warnings
 import traceback
+import threading
+import time
 from typing import Optional, Callable, List, Dict
 import torch
 
@@ -13,6 +16,25 @@ from core.config import resolve_path_for_win, APP_PATHS
 
 # Подавляем лишние предупреждения
 warnings.filterwarnings('ignore')
+
+# --- ПАТЧ ДЛЯ Windows: symlink → copy fallback ---
+# huggingface_hub при скачивании моделей создаёт symlinks,
+# но на Windows без Developer Mode / прав администратора это падает с WinError 1314.
+# Патчим os.symlink чтобы при ошибке использовать копирование файлов.
+if platform.system() == 'Windows':
+    _original_symlink = os.symlink
+
+    def _safe_symlink(src, dst, *args, **kwargs):
+        try:
+            _original_symlink(src, dst, *args, **kwargs)
+        except OSError:
+            abs_src = os.path.join(os.path.dirname(dst), src) if not os.path.isabs(src) else src
+            if os.path.isdir(abs_src):
+                shutil.copytree(abs_src, dst)
+            else:
+                shutil.copy2(abs_src, dst)
+
+    os.symlink = _safe_symlink
 
 # --- ПАТЧ ДЛЯ PyTorch 2.6+ (CRITICAL) ---
 # WhisperX и pyannote используют старый способ загрузки весов.
@@ -67,6 +89,95 @@ class Transcriber:
         print(msg)  # В консоль
         if self.progress_callback:
             self.progress_callback(msg) # В UI
+
+    def _is_model_cached(self, download_root: str) -> bool:
+        """
+        Проверяет, скачана ли модель Whisper в локальный кэш.
+        Модель считается скачанной если есть snapshot с config.json и model.bin.
+        """
+        if not download_root:
+            return False
+        model_dir = os.path.join(
+            download_root,
+            f"models--Systran--faster-whisper-{self.model_size}",
+            "snapshots"
+        )
+        if not os.path.exists(model_dir):
+            return False
+        try:
+            for snapshot in os.listdir(model_dir):
+                snapshot_path = os.path.join(model_dir, snapshot)
+                if not os.path.isdir(snapshot_path):
+                    continue
+                config = os.path.join(snapshot_path, "config.json")
+                model_bin = os.path.join(snapshot_path, "model.bin")
+                if os.path.exists(config) and os.path.exists(model_bin):
+                    return True
+        except OSError:
+            pass
+        return False
+
+    def _download_model_with_progress(self, download_root: str):
+        """
+        Скачивает модель Whisper с HuggingFace с отображением прогресса.
+        Прогресс отслеживается по размеру скачанных blob-файлов.
+        """
+        from huggingface_hub import snapshot_download
+
+        repo_id = f"Systran/faster-whisper-{self.model_size}"
+        blobs_dir = os.path.join(
+            download_root,
+            f"models--Systran--faster-whisper-{self.model_size}",
+            "blobs"
+        )
+
+        # Примерные размеры моделей (в байтах)
+        model_sizes = {
+            "tiny": 150_000_000,
+            "base": 290_000_000,
+            "small": 950_000_000,
+            "medium": 3_000_000_000,
+            "large-v2": 6_200_000_000,
+            "large-v3": 6_200_000_000,
+        }
+        expected_size = model_sizes.get(self.model_size, 6_200_000_000)
+
+        # Фоновый поток для отслеживания прогресса
+        stop_monitor = threading.Event()
+        last_pct = [-1]  # mutable для замыкания
+
+        def _monitor():
+            while not stop_monitor.is_set():
+                try:
+                    total = 0
+                    if os.path.exists(blobs_dir):
+                        for f in os.listdir(blobs_dir):
+                            fp = os.path.join(blobs_dir, f)
+                            if os.path.isfile(fp):
+                                total += os.path.getsize(fp)
+                    pct = int(min(total / expected_size * 100, 99))
+                    if pct != last_pct[0] and pct % 5 == 0:
+                        last_pct[0] = pct
+                        gb_done = total / 1e9
+                        gb_total = expected_size / 1e9
+                        self._log(f"📥 Скачивание: {pct}% ({gb_done:.1f} / {gb_total:.1f} ГБ)")
+                except Exception:
+                    pass
+                stop_monitor.wait(3)
+
+        monitor = threading.Thread(target=_monitor, daemon=True)
+        monitor.start()
+
+        try:
+            snapshot_download(
+                repo_id,
+                cache_dir=download_root,
+                local_files_only=False,
+            )
+            self._log("✅ Модель успешно скачана и сохранена!")
+        finally:
+            stop_monitor.set()
+            monitor.join(timeout=3)
 
     def _detect_environment(self):
         """
@@ -163,17 +274,27 @@ class Transcriber:
             
             # --- ШАГ 1: ТРАНСКРИПЦИЯ ---
             self._log(f"\n🎧 Шаг 1/4: Транскрипция ({self.model_size})...")
-            self._log("⏳ Загрузка модели (при первом запуске скачивается с интернета, может занять 5–15 мин)...")
+
+            download_root = str(APP_PATHS.get("models", ""))
+
+            # Проверяем, есть ли модель в кэше
+            if self._is_model_cached(download_root):
+                self._log("✅ Модель найдена в кэше, загрузка из локальных файлов...")
+            else:
+                self._log(f"📥 Модель {self.model_size} не найдена локально. Начинается скачивание...")
+                self._log("⏳ Это нужно сделать только один раз. Скачивание может занять 5–15 минут.")
+                self._download_model_with_progress(download_root)
+
             # Диаризация строго через Pyannote: VAD при загрузке тоже Pyannote.
             # В упакованном билде (PyInstaller) pytorch_lightning + speechbrain вызывают
             # глубокую рекурсию в inspect.stack() → RecursionError. Временно повышаем лимит.
+            self._log("⚙️ Инициализация модели...")
             old_limit = getattr(sys, "getrecursionlimit", lambda: 1000)()
             try:
                 sys.setrecursionlimit(4000)
             except Exception:
                 pass
             try:
-                download_root = str(APP_PATHS.get("models", ""))
                 model = whisperx.load_model(
                     self.model_size,
                     device=self.device,
