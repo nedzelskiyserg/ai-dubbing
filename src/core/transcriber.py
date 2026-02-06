@@ -250,25 +250,139 @@ class Transcriber:
     def _load_and_transcribe(self, whisperx, audio_path, language, download_root, batch_size):
         """
         Загружает модель и выполняет транскрипцию.
-        При краше на CUDA (segfault PyAnnote VAD) — автоматический fallback на CPU.
+
+        Стратегия:
+        1. Subprocess-режим (основной): транскрипция в отдельном процессе.
+           Если подпроцесс упадёт с segfault (PyAnnote VAD в Parallels/VM),
+           API-сервер выживет и повторит с другим VAD (silero).
+        2. Direct-режим (fallback): если subprocess недоступен (frozen exe),
+           запускаем в текущем процессе с try/except.
         """
+        import subprocess as sp
+        import json as json_mod
+
         devices_to_try = [(self.device, self.compute_type)]
-        # Если основной девайс — CUDA, добавляем CPU как fallback
         if self.device == "cuda":
             devices_to_try.append(("cpu", "float32"))
 
-        last_error = None
+        # VAD-методы: pyannote (точнее) → silero (легче, совместимее с VM)
+        vad_methods = ["pyannote", "silero"]
+
+        script_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "transcribe_subprocess.py"
+        )
+        can_subprocess = os.path.exists(script_path) and not getattr(sys, 'frozen', False)
+
+        # ---- SUBPROCESS MODE ----
+        if can_subprocess:
+            for device, compute_type in devices_to_try:
+                for vad_method in vad_methods:
+                    self._log(f"⚙️ Транскрипция: device={device}, vad={vad_method}")
+
+                    config = {
+                        "model_size": self.model_size,
+                        "device": device,
+                        "compute_type": compute_type,
+                        "language": language,
+                        "download_root": download_root,
+                        "audio_path": audio_path,
+                        "batch_size": batch_size,
+                        "vad_method": vad_method,
+                        "models_dir": str(APP_PATHS.get("models", "")),
+                    }
+
+                    import tempfile
+                    pid = os.getpid()
+                    tmp = tempfile.gettempdir()
+                    config_path = os.path.join(tmp, f"wsx_cfg_{pid}.json")
+                    result_path = os.path.join(tmp, f"wsx_res_{pid}.json")
+
+                    with open(config_path, 'w', encoding='utf-8') as f:
+                        json_mod.dump(config, f)
+
+                    try:
+                        proc = sp.Popen(
+                            [sys.executable, script_path, config_path, result_path],
+                            stdout=sp.PIPE, stderr=sp.PIPE, text=True,
+                        )
+
+                        # Ждём завершения с проверкой stop-callback
+                        while proc.poll() is None:
+                            if self.should_stop_callback and self.should_stop_callback():
+                                proc.terminate()
+                                proc.wait(timeout=5)
+                                self._cleanup_temp(config_path, result_path)
+                                raise InterruptedError("Processing stopped by user")
+                            # Читаем stdout подпроцесса (логи)
+                            line = proc.stdout.readline()
+                            if line:
+                                self._log(line.rstrip())
+                            time.sleep(0.1)
+
+                        # Дочитываем оставшийся вывод
+                        remaining, stderr = proc.communicate(timeout=5)
+                        if remaining:
+                            for line in remaining.strip().split('\n'):
+                                if line:
+                                    self._log(line)
+
+                    except InterruptedError:
+                        raise
+                    except sp.TimeoutExpired:
+                        self._log("⚠️ Таймаут транскрипции")
+                        proc.kill()
+                        self._cleanup_temp(config_path, result_path)
+                        continue
+                    except Exception as e:
+                        self._log(f"⚠️ Ошибка запуска подпроцесса: {e}")
+                        self._cleanup_temp(config_path, result_path)
+                        continue
+
+                    self._cleanup_temp(config_path)
+
+                    if proc.returncode == 0 and os.path.exists(result_path):
+                        try:
+                            with open(result_path, 'r', encoding='utf-8') as f:
+                                data = json_mod.load(f)
+                            self._cleanup_temp(result_path)
+
+                            if data.get("status") == "ok":
+                                self.device = device
+                                self.compute_type = compute_type
+                                self._log(f"✅ Транскрипция завершена ({device}, {vad_method})")
+                                return None, {
+                                    "segments": data["segments"],
+                                    "language": data["language"],
+                                }
+                            else:
+                                self._log(f"⚠️ Ошибка в подпроцессе: {data.get('error', '?')}")
+                        except Exception as e:
+                            self._log(f"⚠️ Ошибка чтения результата: {e}")
+                            self._cleanup_temp(result_path)
+                    else:
+                        code = proc.returncode or 0
+                        exit_hex = f"0x{code & 0xFFFFFFFF:08X}"
+                        self._log(f"⚠️ Подпроцесс упал (exit: {exit_hex})")
+                        if stderr:
+                            self._log(f"📋 {stderr[-500:]}")
+                        self._cleanup_temp(result_path)
+
+            # Все subprocess-попытки провалились
+            raise RuntimeError(
+                "Не удалось выполнить транскрипцию ни с одним VAD-методом. "
+                "Возможная причина: несовместимость с виртуальной средой (Parallels/VM)."
+            )
+
+        # ---- DIRECT MODE (frozen exe / script not found) ----
+        self._log("⚙️ Прямая транскрипция (без изоляции подпроцессом)...")
         for device, compute_type in devices_to_try:
             if device != self.device:
-                self._log(f"⚠️ Повторная попытка на CPU (fallback после ошибки CUDA)...")
+                self._log(f"⚠️ Повторная попытка на CPU...")
 
             old_limit = getattr(sys, "getrecursionlimit", lambda: 1000)()
             try:
                 sys.setrecursionlimit(4000)
-            except Exception:
-                pass
-
-            try:
                 model = whisperx.load_model(
                     self.model_size,
                     device=device,
@@ -278,13 +392,8 @@ class Transcriber:
                     vad_method="pyannote",
                 )
             except Exception as e:
-                last_error = e
                 self._log(f"⚠️ Ошибка загрузки модели на {device}: {e}")
                 self._cleanup_memory()
-                try:
-                    sys.setrecursionlimit(old_limit)
-                except Exception:
-                    pass
                 continue
             finally:
                 try:
@@ -292,42 +401,36 @@ class Transcriber:
                 except Exception:
                     pass
 
-            # Проверяем флаг остановки перед транскрипцией
             if self.should_stop_callback and self.should_stop_callback():
                 del model
                 self._cleanup_memory()
-                self._log("⏹️ Транскрипция прервана пользователем")
                 raise InterruptedError("Processing stopped by user")
 
-            # КРИТИЧЕСКИ ВАЖНО: Настройки для точных таймингов
-            # chunk_size=10: заставляет Whisper чаще сбрасывать тайминги (по умолчанию 30)
-            self._log(f"⚙️ Параметры: device={device}, compute_type={compute_type}, batch_size={batch_size}, chunk_size=10")
-
+            self._log(f"⚙️ Параметры: device={device}, compute_type={compute_type}, "
+                       f"batch_size={batch_size}, chunk_size=10")
             try:
-                result = model.transcribe(
-                    audio_path,
-                    batch_size=batch_size,
-                    chunk_size=10
-                )
-                # Успешно — обновляем device для остальных шагов (alignment, diarization)
+                result = model.transcribe(audio_path, batch_size=batch_size, chunk_size=10)
                 self.device = device
                 self.compute_type = compute_type
                 return model, result
             except Exception as e:
-                last_error = e
                 self._log(f"⚠️ Ошибка транскрипции на {device}: {e}")
                 try:
                     del model
                 except Exception:
                     pass
                 self._cleanup_memory()
-                continue
 
-        # Все попытки провалились
-        raise RuntimeError(
-            f"Не удалось выполнить транскрипцию ни на одном устройстве. "
-            f"Последняя ошибка: {last_error}"
-        )
+        raise RuntimeError("Не удалось выполнить транскрипцию ни на одном устройстве.")
+
+    def _cleanup_temp(self, *paths):
+        """Удаляет временные файлы, игнорируя ошибки."""
+        for p in paths:
+            try:
+                if p and os.path.exists(p):
+                    os.unlink(p)
+            except OSError:
+                pass
 
     def transcribe_full(
         self,
