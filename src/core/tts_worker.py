@@ -22,6 +22,18 @@ warnings.filterwarnings("ignore")
 # Устанавливаем переменную окружения для лицензии
 os.environ["COQUI_TOS_AGREED"] = "1"
 
+# Перенаправляем кэш Coqui TTS в папку приложения (до импорта TTS!)
+# Среда может быть уже настроена через api_server, но на всякий случай ставим и здесь
+try:
+    from core.config import APP_PATHS as _APP_PATHS
+    _tts_cache = str(_APP_PATHS["models"] / "tts")
+    os.environ.setdefault("COQUI_TTS_CACHE", _tts_cache)
+except Exception:
+    pass  # worker может запускаться без core.config
+
+# Максимальное количество попыток загрузки модели при сетевых ошибках
+MAX_MODEL_LOAD_RETRIES = 3
+
 # Глобальные переменные для кэширования
 _cached_tts = None
 _cached_model_name = None
@@ -189,6 +201,20 @@ def generate_tts_advanced(
     try:
         from TTS.api import TTS
 
+        # Патчим директорию кэша моделей на папку приложения
+        try:
+            import TTS.utils.manage as _tts_manage
+            _orig_gudd = _tts_manage.get_user_data_dir
+            def _patched_gudd(appname):
+                custom = os.environ.get("COQUI_TTS_CACHE")
+                if custom and appname == "tts":
+                    os.makedirs(custom, exist_ok=True)
+                    return custom
+                return _orig_gudd(appname)
+            _tts_manage.get_user_data_dir = _patched_gudd
+        except Exception:
+            pass
+
         # Нормализуем язык
         lang_map = {
             'RUSSIAN': 'ru', 'ENGLISH': 'en', 'SPANISH': 'es', 'FRENCH': 'fr',
@@ -198,14 +224,43 @@ def generate_tts_advanced(
         }
         normalized_language = lang_map.get(language.upper(), language.lower())
 
-        # Кэшируем модель
+        # Кэшируем модель (с retry при сетевых ошибках)
         if _cached_tts is None or _cached_model_name != model_name:
             if segment_info:
                 print(f"📦 [{segment_info['index']}/{segment_info['total']}] Загрузка модели XTTS...", file=sys.stderr, flush=True)
             else:
                 print("📦 Загрузка модели XTTS...", file=sys.stderr, flush=True)
 
-            _cached_tts = TTS(model_name=model_name, progress_bar=False)
+            last_err = None
+            for _attempt in range(1, MAX_MODEL_LOAD_RETRIES + 1):
+                try:
+                    _cached_tts = TTS(model_name=model_name, progress_bar=False)
+                    last_err = None
+                    break
+                except Exception as _dl_err:
+                    last_err = _dl_err
+                    err_str = str(_dl_err).lower()
+                    is_network = (
+                        isinstance(_dl_err, (ConnectionError, OSError, TimeoutError))
+                        or any(kw in err_str for kw in [
+                            "download", "connection", "timeout", "urllib3",
+                            "requests", "ssl", "socket", "network", "failed to download",
+                        ])
+                    )
+                    if is_network and _attempt < MAX_MODEL_LOAD_RETRIES:
+                        wait = 5 * (2 ** (_attempt - 1))
+                        print(
+                            f"⚠️ Попытка {_attempt}/{MAX_MODEL_LOAD_RETRIES} загрузки модели не удалась: {_dl_err}\n"
+                            f"   Повтор через {wait} сек...",
+                            file=sys.stderr, flush=True
+                        )
+                        time.sleep(wait)
+                    else:
+                        raise
+
+            if last_err is not None:
+                raise last_err
+
             _cached_model_name = model_name
 
             # Получаем синтезатор для прямого доступа (если доступен)

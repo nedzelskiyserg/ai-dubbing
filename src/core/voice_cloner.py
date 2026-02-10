@@ -15,6 +15,10 @@ import torch
 from pydub import AudioSegment
 from core.config import APP_PATHS
 
+# Перенаправляем кэш Coqui TTS в папку приложения (до импорта TTS!)
+_tts_cache_dir = str(APP_PATHS["models"] / "tts")
+os.environ.setdefault("COQUI_TTS_CACHE", _tts_cache_dir)
+
 # Пытаемся импортировать TTS (поддерживаем и старый TTS, и новый coqui-tts)
 TTS_AVAILABLE = False
 TTS = None
@@ -24,6 +28,21 @@ try:
     # Пробуем импортировать TTS API
     from TTS.api import TTS
     TTS_AVAILABLE = True
+
+    # Патчим директорию кэша моделей на папку приложения
+    try:
+        import TTS.utils.manage as _tts_manage
+        _original_get_user_data_dir = _tts_manage.get_user_data_dir
+        def _patched_get_user_data_dir(appname):
+            custom = os.environ.get("COQUI_TTS_CACHE")
+            if custom and appname == "tts":
+                os.makedirs(custom, exist_ok=True)
+                return custom
+            return _original_get_user_data_dir(appname)
+        _tts_manage.get_user_data_dir = _patched_get_user_data_dir
+    except Exception:
+        pass  # Не критично — модель скачается в стандартную папку
+
 except ImportError as e:
     # TTS не установлен
     TTS_AVAILABLE = False
@@ -39,6 +58,9 @@ except Exception as e:
     TTS_AVAILABLE = False
     TTS = None
     TTS_ERROR = f"UnexpectedError: {str(e)}"
+
+# Максимальное количество попыток загрузки модели (при сетевых ошибках)
+MAX_MODEL_LOAD_RETRIES = 3
 
 
 class VoiceCloner:
@@ -135,28 +157,28 @@ class VoiceCloner:
         return None
     
     def _load_model(self):
-        """Ленивая загрузка модели XTTS"""
+        """Ленивая загрузка модели XTTS с retry при сетевых ошибках"""
         if self.model is not None:
             return
-        
+
         # Если используем venv_tts через subprocess, модель не загружаем
         if self.use_venv_tts:
             self._log(f"✅ Используется venv_tts для генерации TTS (Python 3.11+)")
             return
-        
+
         if not TTS_AVAILABLE:
             import sys
             python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-            
+
             error_msg = (
                 f"❌ TTS (Coqui TTS) недоступен.\n"
                 f"   Текущая версия Python: {python_version}\n"
                 f"   Требуется: Python 3.10+\n\n"
             )
-            
+
             if TTS_ERROR:
                 error_msg += f"   Ошибка: {TTS_ERROR}\n\n"
-            
+
             error_msg += (
                 "💡 Автоматическая установка:\n"
                 "   Запустите: ./setup_voice_cloning.sh\n\n"
@@ -166,17 +188,56 @@ class VoiceCloner:
                 "   3. source venv_tts/bin/activate\n"
                 "   4. pip install coqui-tts pydub\n"
             )
-            
+
             raise ImportError(error_msg)
-        
+
         self._log(f"📦 Загрузка модели XTTS: {self.model_name}...")
-        try:
-            self.model = TTS(model_name=self.model_name, progress_bar=False)
-            self.model.to(self.device)
-            self._log(f"✅ Модель XTTS загружена на {self.device}")
-        except Exception as e:
-            self._log(f"❌ Ошибка загрузки модели XTTS: {e}")
-            raise
+
+        last_error = None
+        for attempt in range(1, MAX_MODEL_LOAD_RETRIES + 1):
+            try:
+                self.model = TTS(model_name=self.model_name, progress_bar=False)
+                self.model.to(self.device)
+                self._log(f"✅ Модель XTTS загружена на {self.device}")
+                return
+            except (ConnectionError, OSError, TimeoutError) as e:
+                # Сетевые ошибки — retry с backoff
+                last_error = e
+                if attempt < MAX_MODEL_LOAD_RETRIES:
+                    wait = 5 * (2 ** (attempt - 1))  # 5, 10, 20 сек
+                    self._log(
+                        f"⚠️ Попытка {attempt}/{MAX_MODEL_LOAD_RETRIES} не удалась: {e}\n"
+                        f"   Повтор через {wait} сек..."
+                    )
+                    time.sleep(wait)
+                else:
+                    self._log(
+                        f"❌ Не удалось загрузить модель XTTS после {MAX_MODEL_LOAD_RETRIES} попыток.\n"
+                        f"   Ошибка: {e}\n"
+                        f"   Проверьте интернет-соединение и попробуйте снова."
+                    )
+            except Exception as e:
+                # urllib3, requests и другие ошибки загрузки
+                err_str = str(e).lower()
+                is_network = any(kw in err_str for kw in [
+                    "download", "connection", "timeout", "urllib3",
+                    "requests", "ssl", "socket", "network", "failed to download",
+                ])
+                if is_network and attempt < MAX_MODEL_LOAD_RETRIES:
+                    last_error = e
+                    wait = 5 * (2 ** (attempt - 1))
+                    self._log(
+                        f"⚠️ Попытка {attempt}/{MAX_MODEL_LOAD_RETRIES} не удалась (сеть): {e}\n"
+                        f"   Повтор через {wait} сек..."
+                    )
+                    time.sleep(wait)
+                else:
+                    self._log(f"❌ Ошибка загрузки модели XTTS: {e}")
+                    raise
+
+        raise RuntimeError(
+            f"Не удалось загрузить модель XTTS после {MAX_MODEL_LOAD_RETRIES} попыток: {last_error}"
+        )
     
     def _generate_tts_via_venv(self, text: str, speaker_wav: str, output_path: str, language: str, segment_index: int = None, total_segments: int = None, tts_speed: float = 1.0) -> bool:
         """

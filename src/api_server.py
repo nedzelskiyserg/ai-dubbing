@@ -32,6 +32,8 @@ try:
     # Кэш Hugging Face (Whisper, Pyannote) — в папку приложения, чтобы предзагруженная large-v3 находилась
     os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(APP_PATHS["models"]))
     os.environ.setdefault("HF_HOME", str(APP_PATHS["models"]))
+    # Кэш Coqui TTS (XTTS) — тоже в папку приложения
+    os.environ.setdefault("COQUI_TTS_CACHE", str(APP_PATHS["models"] / "tts"))
 except Exception:
     # В упакованном exe при падении на импорте пишем лог — пользователь не видит консоль
     if getattr(sys, "frozen", False):
