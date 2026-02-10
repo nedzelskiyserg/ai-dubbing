@@ -416,6 +416,7 @@ async function installAll(onProgress) {
       '-r', reqPath,
       '--no-cache-dir',
       '--no-warn-script-location',
+      '--extra-index-url', torchConfig.indexUrl, // ВАЖНО: указываем индекс (CUDA/CPU) чтобы pip не скачал cpu-версию при разрешении зависимостей
     ], {
       cwd: getPythonDir(),
       env: { ...process.env, PYTHONUTF8: '1' },
