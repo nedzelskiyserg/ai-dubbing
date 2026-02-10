@@ -196,11 +196,18 @@ class Transcriber:
             return "cpu", "float32"
         
         if torch.cuda.is_available():
-            self._log("🟢 Обнаружена NVIDIA GPU (CUDA).")
+            gpu_name = torch.cuda.get_device_name(0)
+            self._log(f"🟢 Обнаружена NVIDIA GPU: {gpu_name} (CUDA {torch.version.cuda})")
             return "cuda", "float16"
-            
-        self._log("⚠️ GPU не обнаружен. Используется CPU.")
-        return "cpu", "float32"  # Используем float32 и для других CPU систем
+
+        # Диагностика: почему CUDA не доступна
+        cuda_built = getattr(torch.version, 'cuda', None)
+        if cuda_built:
+            self._log(f"⚠️ PyTorch собран с CUDA {cuda_built}, но GPU не обнаружен. Проверьте драйверы NVIDIA.")
+        else:
+            self._log("⚠️ PyTorch установлен без поддержки CUDA (CPU-only). GPU не будет использоваться.")
+            self._log("   Для ускорения переустановите приложение — GPU определится автоматически.")
+        return "cpu", "float32"
 
     def _cleanup_memory(self):
         """Очистка памяти от загруженных нейросетей"""

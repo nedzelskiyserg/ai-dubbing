@@ -60,7 +60,31 @@ except Exception as e:
     TTS_ERROR = f"UnexpectedError: {str(e)}"
 
 # Максимальное количество попыток загрузки модели (при сетевых ошибках)
-MAX_MODEL_LOAD_RETRIES = 3
+MAX_MODEL_LOAD_RETRIES = 5
+
+
+def _cleanup_tts_partial_download():
+    """Удаляет частично скачанные файлы модели XTTS перед повторной попыткой."""
+    import shutil
+    cache_dir = os.environ.get("COQUI_TTS_CACHE", "")
+    if not cache_dir or not os.path.isdir(cache_dir):
+        return
+    model_dir = os.path.join(cache_dir, "tts_models--multilingual--multi-dataset--xtts_v2")
+    if os.path.exists(model_dir):
+        has_config = os.path.exists(os.path.join(model_dir, "config.json"))
+        has_model = any(f.endswith(".pth") for f in os.listdir(model_dir)) if os.path.isdir(model_dir) else False
+        if not (has_config and has_model):
+            try:
+                shutil.rmtree(model_dir)
+            except Exception:
+                pass
+    # Чистим .zip промежуточные файлы
+    for f in os.listdir(cache_dir):
+        if f.endswith(".zip") and "xtts" in f.lower():
+            try:
+                os.unlink(os.path.join(cache_dir, f))
+            except Exception:
+                pass
 
 
 class VoiceCloner:
@@ -126,14 +150,21 @@ class VoiceCloner:
         Для Mac (Apple Silicon) используем CPU по умолчанию для стабильности.
         """
         if torch.cuda.is_available():
+            gpu_name = torch.cuda.get_device_name(0)
+            self._log(f"🟢 NVIDIA GPU: {gpu_name} (CUDA {torch.version.cuda})")
             return "cuda"
-        
+
+        # Диагностика: почему CUDA не доступна
+        cuda_built = getattr(torch.version, 'cuda', None)
+        if cuda_built:
+            self._log(f"⚠️ PyTorch собран с CUDA {cuda_built}, но GPU не обнаружен. Проверьте драйверы NVIDIA.")
+        elif sys.platform == 'win32':
+            self._log("⚠️ PyTorch установлен без CUDA. TTS будет работать на CPU (медленнее).")
+
         # Для Mac проверяем MPS, но по умолчанию используем CPU для стабильности
         if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-            # MPS доступен, но XTTS может быть нестабилен на MPS
-            # Используем CPU для надежности на Mac
             return "cpu"
-        
+
         return "cpu"
     
     def _find_venv_tts(self) -> Optional[Path]:
@@ -196,43 +227,38 @@ class VoiceCloner:
         last_error = None
         for attempt in range(1, MAX_MODEL_LOAD_RETRIES + 1):
             try:
+                if attempt > 1:
+                    _cleanup_tts_partial_download()
                 self.model = TTS(model_name=self.model_name, progress_bar=False)
                 self.model.to(self.device)
                 self._log(f"✅ Модель XTTS загружена на {self.device}")
                 return
-            except (ConnectionError, OSError, TimeoutError) as e:
-                # Сетевые ошибки — retry с backoff
-                last_error = e
-                if attempt < MAX_MODEL_LOAD_RETRIES:
-                    wait = 5 * (2 ** (attempt - 1))  # 5, 10, 20 сек
-                    self._log(
-                        f"⚠️ Попытка {attempt}/{MAX_MODEL_LOAD_RETRIES} не удалась: {e}\n"
-                        f"   Повтор через {wait} сек..."
-                    )
-                    time.sleep(wait)
-                else:
-                    self._log(
-                        f"❌ Не удалось загрузить модель XTTS после {MAX_MODEL_LOAD_RETRIES} попыток.\n"
-                        f"   Ошибка: {e}\n"
-                        f"   Проверьте интернет-соединение и попробуйте снова."
-                    )
             except Exception as e:
-                # urllib3, requests и другие ошибки загрузки
                 err_str = str(e).lower()
-                is_network = any(kw in err_str for kw in [
-                    "download", "connection", "timeout", "urllib3",
-                    "requests", "ssl", "socket", "network", "failed to download",
-                ])
+                is_network = (
+                    isinstance(e, (ConnectionError, OSError, TimeoutError))
+                    or any(kw in err_str for kw in [
+                        "download", "connection", "timeout", "urllib3",
+                        "requests", "ssl", "socket", "network", "failed to download",
+                    ])
+                )
+                last_error = e
                 if is_network and attempt < MAX_MODEL_LOAD_RETRIES:
-                    last_error = e
-                    wait = 5 * (2 ** (attempt - 1))
+                    wait = 10 * (2 ** (attempt - 1))  # 10, 20, 40, 80 сек
                     self._log(
                         f"⚠️ Попытка {attempt}/{MAX_MODEL_LOAD_RETRIES} не удалась (сеть): {e}\n"
                         f"   Повтор через {wait} сек..."
                     )
                     time.sleep(wait)
                 else:
-                    self._log(f"❌ Ошибка загрузки модели XTTS: {e}")
+                    if is_network:
+                        self._log(
+                            f"❌ Не удалось скачать модель XTTS после {MAX_MODEL_LOAD_RETRIES} попыток.\n"
+                            f"   Ошибка: {e}\n"
+                            f"   Проверьте интернет-соединение и попробуйте снова."
+                        )
+                    else:
+                        self._log(f"❌ Ошибка загрузки модели XTTS: {e}")
                     raise
 
         raise RuntimeError(

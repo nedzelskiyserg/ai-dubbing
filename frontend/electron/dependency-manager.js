@@ -20,7 +20,8 @@ const PYTHON_VERSION = '3.10.11';
 const PYTHON_URL = `https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-embed-amd64.zip`;
 const GET_PIP_URL = 'https://bootstrap.pypa.io/get-pip.py';
 const FFMPEG_URL = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip';
-const TORCH_INDEX_URL = 'https://download.pytorch.org/whl/cpu';
+const TORCH_INDEX_CPU = 'https://download.pytorch.org/whl/cpu';
+const TORCH_INDEX_CUDA = 'https://download.pytorch.org/whl/cu124';  // CUDA 12.4
 // VC++ Redistributable 2015-2022 (x64) — обязателен для PyTorch (c10.dll и др.)
 const VCREDIST_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe';
 
@@ -49,6 +50,7 @@ function getFFmpegExe() {
 }
 function getSetupMarker() { return path.join(getBaseDir(), '.setup-complete'); }
 function getVcRedistMarker() { return path.join(getBaseDir(), '.vcredist-installed'); }
+function getTorchVariantMarker() { return path.join(getBaseDir(), '.torch-variant'); }
 
 // --- Утилиты ---
 
@@ -124,6 +126,59 @@ function runProcess(exe, args, opts, onOutput) {
       resolve();
     });
   });
+}
+
+// --- Детект NVIDIA GPU ---
+
+/**
+ * Определяет наличие NVIDIA GPU через nvidia-smi.
+ * Возвращает { detected: bool, name: string|null }.
+ */
+function detectNvidiaGpu() {
+  return new Promise((resolve) => {
+    if (!isWindows) {
+      return resolve({ detected: false, name: null });
+    }
+    // nvidia-smi всегда доступна при установленных драйверах NVIDIA
+    execFile('nvidia-smi', ['--query-gpu=name', '--format=csv,noheader,nounits'], { timeout: 10000 }, (err, stdout) => {
+      if (err || !stdout || !stdout.trim()) {
+        // Fallback: WMIC (устаревший, но работает на Windows 10)
+        execFile('cmd.exe', ['/c', 'wmic path win32_videocontroller get name /format:list'], { timeout: 10000 }, (err2, stdout2) => {
+          if (!err2 && stdout2 && /nvidia/i.test(stdout2)) {
+            const match = stdout2.match(/Name=(.+)/i);
+            return resolve({ detected: true, name: match ? match[1].trim() : 'NVIDIA GPU' });
+          }
+          return resolve({ detected: false, name: null });
+        });
+        return;
+      }
+      const gpuName = stdout.trim().split('\n')[0].trim();
+      resolve({ detected: true, name: gpuName });
+    });
+  });
+}
+
+/**
+ * Возвращает нужный вариант PyTorch ('cpu' или 'cu124') и URL индекса.
+ */
+async function getTorchConfig() {
+  const gpu = await detectNvidiaGpu();
+  if (gpu.detected) {
+    return { variant: 'cu124', indexUrl: TORCH_INDEX_CUDA, gpuName: gpu.name };
+  }
+  return { variant: 'cpu', indexUrl: TORCH_INDEX_CPU, gpuName: null };
+}
+
+/**
+ * Проверяет, совпадает ли установленный вариант PyTorch с текущим оборудованием.
+ * Если GPU появился после установки CPU-версии, нужно переустановить PyTorch.
+ */
+function getInstalledTorchVariant() {
+  const marker = getTorchVariantMarker();
+  if (fs.existsSync(marker)) {
+    return fs.readFileSync(marker, 'utf8').trim();
+  }
+  return null;
 }
 
 // --- Проверка зависимостей ---
@@ -289,24 +344,61 @@ async function installAll(onProgress) {
   }
 
   // 3. Python пакеты
-  if (!status.packagesOk) {
-    // 3a. Сначала ставим PyTorch CPU (меньший размер)
-    log('packages', 0, 'Установка PyTorch (CPU)... Это может занять несколько минут.');
+
+  // Определяем нужный вариант PyTorch (CPU или CUDA) по наличию NVIDIA GPU
+  const torchConfig = await getTorchConfig();
+  const installedVariant = getInstalledTorchVariant();
+  const needTorchReinstall = installedVariant && installedVariant !== torchConfig.variant;
+
+  if (needTorchReinstall) {
+    // GPU появился (или исчез) после первой установки — переустанавливаем PyTorch
+    const fromTo = `${installedVariant} → ${torchConfig.variant}`;
+    const reason = torchConfig.gpuName
+      ? `Обнаружена NVIDIA GPU: ${torchConfig.gpuName}`
+      : 'NVIDIA GPU не обнаружен';
+    log('packages', 0, `${reason}. Переустановка PyTorch (${fromTo})...`);
     await runProcess(getPythonExe(), [
       '-m', 'pip', 'install',
       'torch', 'torchaudio',
-      '--index-url', TORCH_INDEX_URL,
+      '--index-url', torchConfig.indexUrl,
+      '--force-reinstall',
       '--no-cache-dir',
       '--no-warn-script-location',
     ], {
       cwd: getPythonDir(),
       env: { ...process.env, PYTHONUTF8: '1' },
-      timeout: 600000,
+      timeout: 900000,
     }, (line) => {
       const trimmed = line.trim();
       if (trimmed) log('packages', 20, trimmed);
     });
-    log('packages', 30, 'PyTorch установлен. Установка остальных зависимостей...');
+    fs.writeFileSync(getTorchVariantMarker(), torchConfig.variant, 'utf8');
+    log('packages', 30, `PyTorch (${torchConfig.variant}) переустановлен.`);
+  }
+
+  if (!status.packagesOk) {
+    // 3a. Ставим PyTorch с поддержкой GPU (если есть NVIDIA) или CPU
+    if (torchConfig.gpuName) {
+      log('packages', 0, `Обнаружена NVIDIA GPU: ${torchConfig.gpuName}. Установка PyTorch с CUDA... Это может занять несколько минут.`);
+    } else {
+      log('packages', 0, 'NVIDIA GPU не обнаружен. Установка PyTorch (CPU)... Это может занять несколько минут.');
+    }
+    await runProcess(getPythonExe(), [
+      '-m', 'pip', 'install',
+      'torch', 'torchaudio',
+      '--index-url', torchConfig.indexUrl,
+      '--no-cache-dir',
+      '--no-warn-script-location',
+    ], {
+      cwd: getPythonDir(),
+      env: { ...process.env, PYTHONUTF8: '1' },
+      timeout: 900000,  // 15 мин (CUDA-версия ~2.5 ГБ)
+    }, (line) => {
+      const trimmed = line.trim();
+      if (trimmed) log('packages', 20, trimmed);
+    });
+    fs.writeFileSync(getTorchVariantMarker(), torchConfig.variant, 'utf8');
+    log('packages', 30, `PyTorch (${torchConfig.variant}) установлен. Установка остальных зависимостей...`);
 
     // 3b. Определяем путь к requirements.txt
     const reqPath = getRequirementsPath();
@@ -356,6 +448,25 @@ async function installAll(onProgress) {
     }
   } else {
     log('models', 100, 'Скрипт предзагрузки не найден, модель скачается при первом запуске');
+  }
+
+  // 3.6. Предзагрузка модели XTTS v2 (~1.8 ГБ) для озвучки
+  const downloadTtsScript = srcPath ? path.join(srcPath, 'download_tts_model.py') : null;
+  if (downloadTtsScript && fs.existsSync(downloadTtsScript)) {
+    log('models', 0, 'Скачивание модели XTTS v2 (~1.8 ГБ) для озвучки. Это может занять несколько минут...');
+    try {
+      await runProcess(getPythonExe(), [downloadTtsScript], {
+        cwd: srcPath,
+        env: { ...process.env, PYTHONUTF8: '1' },
+        timeout: 900000, // 15 мин (модель ~1.8 ГБ + retry)
+      }, (line) => {
+        const trimmed = line.trim();
+        if (trimmed) log('models', 75, trimmed);
+      });
+      log('models', 100, 'Модель XTTS v2 загружена');
+    } catch (err) {
+      log('models', 100, 'Предзагрузка XTTS пропущена (модель скачается при первом запуске озвучки). ' + (err.message || ''));
+    }
   }
 
   // 4. FFmpeg
@@ -477,6 +588,7 @@ function formatBytes(bytes) {
 module.exports = {
   checkDependencies,
   installAll,
+  detectNvidiaGpu,
   getBaseDir,
   getPythonDir,
   getPythonExe,

@@ -32,7 +32,30 @@ except Exception:
     pass  # worker может запускаться без core.config
 
 # Максимальное количество попыток загрузки модели при сетевых ошибках
-MAX_MODEL_LOAD_RETRIES = 3
+MAX_MODEL_LOAD_RETRIES = 5
+
+
+def _cleanup_tts_partial_download():
+    """Удаляет частично скачанные файлы модели XTTS перед повторной попыткой."""
+    import shutil
+    cache_dir = os.environ.get("COQUI_TTS_CACHE", "")
+    if not cache_dir or not os.path.isdir(cache_dir):
+        return
+    model_dir = os.path.join(cache_dir, "tts_models--multilingual--multi-dataset--xtts_v2")
+    if os.path.exists(model_dir):
+        has_config = os.path.exists(os.path.join(model_dir, "config.json"))
+        has_model = any(f.endswith(".pth") for f in os.listdir(model_dir)) if os.path.isdir(model_dir) else False
+        if not (has_config and has_model):
+            try:
+                shutil.rmtree(model_dir)
+            except Exception:
+                pass
+    for f in os.listdir(cache_dir) if os.path.isdir(cache_dir) else []:
+        if f.endswith(".zip") and "xtts" in f.lower():
+            try:
+                os.unlink(os.path.join(cache_dir, f))
+            except Exception:
+                pass
 
 # Глобальные переменные для кэширования
 _cached_tts = None
@@ -234,6 +257,8 @@ def generate_tts_advanced(
             last_err = None
             for _attempt in range(1, MAX_MODEL_LOAD_RETRIES + 1):
                 try:
+                    if _attempt > 1:
+                        _cleanup_tts_partial_download()
                     _cached_tts = TTS(model_name=model_name, progress_bar=False)
                     last_err = None
                     break
@@ -248,7 +273,7 @@ def generate_tts_advanced(
                         ])
                     )
                     if is_network and _attempt < MAX_MODEL_LOAD_RETRIES:
-                        wait = 5 * (2 ** (_attempt - 1))
+                        wait = 10 * (2 ** (_attempt - 1))  # 10, 20, 40, 80 сек
                         print(
                             f"⚠️ Попытка {_attempt}/{MAX_MODEL_LOAD_RETRIES} загрузки модели не удалась: {_dl_err}\n"
                             f"   Повтор через {wait} сек...",
