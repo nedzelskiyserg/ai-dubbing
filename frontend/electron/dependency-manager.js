@@ -416,7 +416,9 @@ async function installAll(onProgress) {
       '-r', reqPath,
       '--no-cache-dir',
       '--no-warn-script-location',
-      '--extra-index-url', torchConfig.indexUrl, // ВАЖНО: указываем индекс (CUDA/CPU) чтобы pip не скачал cpu-версию при разрешении зависимостей
+      '--no-warn-script-location',
+      // Убрали --extra-index-url отсюда, так как pip все равно может ставить cpu версию.
+      // Вместо этого делаем FORCE REINSTALL после установки всех зависимостей (см. ниже)
     ], {
       cwd: getPythonDir(),
       env: { ...process.env, PYTHONUTF8: '1' },
@@ -425,6 +427,30 @@ async function installAll(onProgress) {
       const trimmed = line.trim();
       if (trimmed) log('packages', 60, trimmed);
     });
+
+    // 4. FORCE REINSTALL PyTorch с CUDA (если GPU есть)
+    // Это критический шаг: requirements.txt мог перезаписать torch на cpu-версию (из PyPI).
+    // Мы принудительно ставим CUDA-версию ПОВЕРХ всего, что установилось ранее.
+    if (torchConfig.gpuName) {
+      log('packages', 90, `🏁 Финализация: Принудительная установка PyTorch (CUDA) поверх зависимостей...`);
+      await runProcess(getPythonExe(), [
+        '-m', 'pip', 'install',
+        'torch', 'torchaudio',
+        '--index-url', torchConfig.indexUrl,
+        '--force-reinstall',
+        '--no-deps', // Не трогать зависимости (numpy и т.д.), только переписать сами бинарники torch
+        '--no-cache-dir',
+        '--no-warn-script-location',
+      ], {
+        cwd: getPythonDir(),
+        env: { ...process.env, PYTHONUTF8: '1' },
+        timeout: 900000,
+      }, (line) => {
+        const trimmed = line.trim();
+        if (trimmed) log('packages', 95, trimmed);
+      });
+      log('packages', 98, `✅ PyTorch (CUDA) успешно восстановлен.`);
+    }
 
     // Записываем маркер успешной установки
     fs.writeFileSync(getSetupMarker(), new Date().toISOString(), 'utf8');
