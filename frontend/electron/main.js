@@ -446,10 +446,16 @@ function startApiServer() {
   // Загружаем переменные из .env файла (HF_TOKEN и др.)
   const dotEnvVars = loadDotEnv();
 
+  // SSL-сертификаты для embedded Python (certifi CA bundle)
+  const certifiPath = path.join(depManager.getPythonDir(), 'Lib', 'site-packages', 'certifi', 'cacert.pem');
+  const sslEnv = fs.existsSync(certifiPath)
+    ? { SSL_CERT_FILE: certifiPath, REQUESTS_CA_BUNDLE: certifiPath, CURL_CA_BUNDLE: certifiPath }
+    : {};
+
   const serverOptions = {
     cwd: cwd,
     stdio: 'pipe',
-    env: Object.assign({}, process.env, dotEnvVars, {
+    env: Object.assign({}, process.env, dotEnvVars, sslEnv, {
       API_PORT_FILE: apiPortFilePath,
       FFMPEG_PATH: ffmpegPath,
       PYTHONUTF8: '1',

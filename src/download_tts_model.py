@@ -8,12 +8,25 @@ import os
 import sys
 import time
 import shutil
+import ssl
 
 # Добавляем текущую папку в path
 if __name__ == "__main__":
     src_dir = os.path.dirname(os.path.abspath(__file__))
     if src_dir not in sys.path:
         sys.path.insert(0, src_dir)
+
+# Фикс SSL для embedded Python (до любых сетевых вызовов)
+try:
+    import certifi
+    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+    os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+    ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
+except ImportError:
+    if sys.platform == 'win32':
+        ssl._create_default_https_context = ssl._create_unverified_context
+except Exception:
+    pass
 
 from core.config import APP_PATHS
 

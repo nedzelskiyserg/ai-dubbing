@@ -318,10 +318,17 @@ Output ONLY the translation, nothing else."""
             return []
 
         if not self._check_ollama_available():
-            raise RuntimeError(
-                "Ollama не доступен. Запустите: brew services start ollama\n"
-                "Или установите: brew install ollama && ollama pull qwen2.5:7b"
-            )
+            import sys
+            if sys.platform == 'win32':
+                raise RuntimeError(
+                    "Ollama не доступен. Скачайте и установите Ollama с https://ollama.com\n"
+                    "После установки запустите: ollama pull qwen2.5:7b"
+                )
+            else:
+                raise RuntimeError(
+                    "Ollama не доступен. Запустите: brew services start ollama\n"
+                    "Или установите: brew install ollama && ollama pull qwen2.5:7b"
+                )
 
         # Автоопределение языка
         if source_lang is None:

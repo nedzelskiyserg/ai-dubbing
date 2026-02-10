@@ -9,6 +9,32 @@ from pathlib import Path
 # Добавляем путь к src (для режима разработки; в PyInstaller bundle пути свои)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# --- Глобальный фикс SSL для embedded Python на Windows ---
+# Embedded Python не имеет системных CA-сертификатов.
+# Нужно настроить ДО любых сетевых вызовов (import requests, urllib3 и т.д.)
+def _fix_ssl_globally():
+    """Настраивает SSL-сертификаты для всех сетевых библиотек."""
+    try:
+        import certifi
+        ca_bundle = certifi.where()
+        # Для requests/urllib3 (используют эти env vars)
+        os.environ.setdefault("SSL_CERT_FILE", ca_bundle)
+        os.environ.setdefault("REQUESTS_CA_BUNDLE", ca_bundle)
+        os.environ.setdefault("CURL_CA_BUNDLE", ca_bundle)
+        # Для стандартной библиотеки ssl (urllib.request и т.д.)
+        import ssl
+        ssl_context = ssl.create_default_context(cafile=ca_bundle)
+        ssl._create_default_https_context = lambda: ssl_context
+    except ImportError:
+        # certifi не установлен — на Windows отключаем проверку
+        if sys.platform == 'win32':
+            import ssl
+            ssl._create_default_https_context = ssl._create_unverified_context
+    except Exception:
+        pass
+
+_fix_ssl_globally()
+
 try:
     from flask import Flask, request, jsonify, send_file
     from flask_cors import CORS

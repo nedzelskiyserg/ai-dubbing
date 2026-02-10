@@ -348,7 +348,11 @@ async function installAll(onProgress) {
   // Определяем нужный вариант PyTorch (CPU или CUDA) по наличию NVIDIA GPU
   const torchConfig = await getTorchConfig();
   const installedVariant = getInstalledTorchVariant();
-  const needTorchReinstall = installedVariant && installedVariant !== torchConfig.variant;
+  // Переустановка нужна если: (1) вариант изменился, или (2) маркера нет + пакеты есть + найден GPU
+  // Случай (2) — апгрейд старой установки (CPU) при наличии GPU
+  const needTorchReinstall = installedVariant
+    ? installedVariant !== torchConfig.variant
+    : (status.packagesOk && torchConfig.variant === 'cu124');
 
   if (needTorchReinstall) {
     // GPU появился (или исчез) после первой установки — переустанавливаем PyTorch
@@ -366,7 +370,7 @@ async function installAll(onProgress) {
       '--no-warn-script-location',
     ], {
       cwd: getPythonDir(),
-      env: { ...process.env, PYTHONUTF8: '1' },
+      env: getPythonEnv(),
       timeout: 900000,
     }, (line) => {
       const trimmed = line.trim();
@@ -436,7 +440,7 @@ async function installAll(onProgress) {
     try {
       await runProcess(getPythonExe(), [downloadModelsScript], {
         cwd: srcPath,
-        env: { ...process.env, PYTHONUTF8: '1' },
+        env: getPythonEnv(),
         timeout: 600000, // 10 мин
       }, (line) => {
         const trimmed = line.trim();
@@ -457,7 +461,7 @@ async function installAll(onProgress) {
     try {
       await runProcess(getPythonExe(), [downloadTtsScript], {
         cwd: srcPath,
-        env: { ...process.env, PYTHONUTF8: '1' },
+        env: getPythonEnv(),
         timeout: 900000, // 15 мин (модель ~1.8 ГБ + retry)
       }, (line) => {
         const trimmed = line.trim();
@@ -575,6 +579,22 @@ function getSrcPath() {
     if (fs.existsSync(p) && fs.existsSync(path.join(p, 'api_server.py'))) return p;
   }
   return null;
+}
+
+/**
+ * Возвращает env-объект с SSL-сертификатами для Python-процессов.
+ * Embedded Python не имеет системных CA — указываем путь к certifi.
+ */
+function getPythonEnv() {
+  const env = { ...process.env, PYTHONUTF8: '1' };
+  // Ищем certifi CA bundle в site-packages
+  const certifiPath = path.join(getPythonDir(), 'Lib', 'site-packages', 'certifi', 'cacert.pem');
+  if (fs.existsSync(certifiPath)) {
+    env.SSL_CERT_FILE = certifiPath;
+    env.REQUESTS_CA_BUNDLE = certifiPath;
+    env.CURL_CA_BUNDLE = certifiPath;
+  }
+  return env;
 }
 
 function formatBytes(bytes) {
