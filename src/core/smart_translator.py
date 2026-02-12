@@ -13,6 +13,7 @@ import requests
 import time
 import logging
 from typing import List, Dict, Optional, Callable, Tuple
+from core.elastic_timing import compute_effective_durations
 
 logger = logging.getLogger(__name__)
 
@@ -346,6 +347,17 @@ Output ONLY the translation, nothing else."""
         self._log(f"🎯 Умный перевод: {source_lang} → {target_lang} ({len(segments)} сегментов)")
         self._log(f"🤖 Модель: {self.model}")
 
+        # --- Elastic Timing: вычисляем эффективные длительности ---
+        # При переводе не знаем длительность видео, поэтому последний сегмент
+        # не расширяется (консервативно; video_maker потом расширит с учётом видео)
+        compute_effective_durations(segments, total_duration_sec=None)
+        extensions = [s.get('gap_extension', 0) for s in segments if s.get('gap_extension', 0) > 0]
+        if extensions:
+            self._log(
+                f"   Elastic timing: {len(extensions)} сегментов с расширением, "
+                f"среднее +{sum(extensions)/len(extensions):.2f}s"
+            )
+
         translated_segments = []
         total = len(segments)
 
@@ -357,9 +369,12 @@ Output ONLY the translation, nothing else."""
             text = seg.get("text", "").strip()
             start = float(seg.get("start", 0))
             end = float(seg.get("end", start + 1))
-            duration = end - start
+            original_duration = end - start
+            effective_duration = float(seg.get("effective_duration", original_duration))
+            gap_ext = float(seg.get("gap_extension", 0.0))
 
-            self._log(f"🔄 [{i+1}/{total}] Перевод ({duration:.1f}s): {text[:50]}...")
+            ext_info = f" +{gap_ext:.1f}s" if gap_ext > 0 else ""
+            self._log(f"🔄 [{i+1}/{total}] Перевод ({effective_duration:.1f}s{ext_info}): {text[:50]}...")
 
             if not text:
                 new_seg = seg.copy()
@@ -372,13 +387,15 @@ Output ONLY the translation, nothing else."""
                     text=text,
                     source_lang=source_lang,
                     target_lang=target_lang,
-                    target_duration_sec=duration
+                    target_duration_sec=effective_duration
                 )
 
                 new_seg = seg.copy()
                 new_seg['text'] = translated_text
                 new_seg['original_text'] = text
                 new_seg['tts_speed'] = tts_speed
+                new_seg['effective_duration'] = effective_duration
+                new_seg['gap_extension'] = gap_ext
 
                 est_duration = self.estimate_speech_duration(translated_text, target_lang)
                 self._log(f"   ✅ {len(translated_text)} симв., ~{est_duration:.1f}s, speed={tts_speed:.2f}x")

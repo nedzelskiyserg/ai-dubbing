@@ -10,8 +10,10 @@ import tempfile
 from pathlib import Path
 from typing import List, Dict, Optional, Callable
 from pydub import AudioSegment
+from pydub.silence import detect_silence
 import logging
 from core.config import APP_PATHS, resolve_path_for_win
+from core.elastic_timing import compute_effective_durations
 
 # Пытаемся импортировать moviepy
 MOVIEPY_AVAILABLE = False
@@ -83,6 +85,11 @@ class VideoMaker:
     # Профессиональные ограничения для качества дубляжа
     MAX_ATEMPO_SPEED = 1.10  # Максимальное ускорение atempo (минимальное влияние на качество)
     MIN_ATEMPO_SPEED = 1.0   # Никогда не замедляем!
+    SEGMENT_FADE_MS = 50     # Fade in/out для каждого сегмента после подгонки (устраняет щелчки на стыках)
+    TRIM_FADE_SEC = 0.050    # Fade-out после обрезки в FFmpeg (секунды)
+    SMART_TRIM_SEARCH_MS = 500      # Окно поиска тишины перед точкой обрезки (мс)
+    SMART_TRIM_MIN_SILENCE_MS = 80  # Минимальная длина тишины для trim-точки (мс)
+    SMART_TRIM_SILENCE_THRESH_DB = -35  # Порог тишины (dBFS)
     
     def __init__(
         self,
@@ -272,10 +279,14 @@ class VideoMaker:
             # Формируем фильтр atempo (работает в диапазоне 0.5-2.0, наш MAX <= 1.15)
             filter_chain = f"atempo={effective_speed:.3f}"
 
-            # Если нужна обрезка — добавляем trim фильтр
+            # Если нужна обрезка — добавляем trim фильтр + fade-out для плавного окончания
             if need_trim:
-                # Обрезаем до целевой длительности после ускорения
-                filter_chain = f"atempo={self.MAX_ATEMPO_SPEED:.3f},atrim=0:{target_duration_sec:.3f}"
+                fade_start = max(0, target_duration_sec - self.TRIM_FADE_SEC)
+                filter_chain = (
+                    f"atempo={self.MAX_ATEMPO_SPEED:.3f},"
+                    f"atrim=0:{target_duration_sec:.3f},"
+                    f"afade=t=out:st={fade_start:.3f}:d={self.TRIM_FADE_SEC:.3f}"
+                )
 
             # Запускаем FFmpeg
             cmd = [
@@ -316,70 +327,182 @@ class VideoMaker:
             self._log(f"📋 Детали: {traceback.format_exc()}")
             return audio_path
     
+    def _smart_trim(
+        self,
+        audio: AudioSegment,
+        target_duration_ms: int,
+        segment_index: int
+    ) -> AudioSegment:
+        """
+        Обрезает аудио на границе тишины (между словами), а не посередине слова.
+
+        Ищет последнюю паузу в окне SMART_TRIM_SEARCH_MS перед точкой обрезки.
+        Если пауза не найдена — обрезает жёстко с fade-out (fallback).
+
+        Args:
+            audio: AudioSegment для обрезки
+            target_duration_ms: Максимальная длительность (мс)
+            segment_index: Индекс сегмента (для логов)
+
+        Returns:
+            Обрезанный AudioSegment
+        """
+        if len(audio) <= target_duration_ms:
+            return audio
+
+        overflow_ms = len(audio) - target_duration_ms
+
+        # Ищем тишину в окне перед точкой обрезки
+        search_start_ms = max(0, target_duration_ms - self.SMART_TRIM_SEARCH_MS)
+        search_region = audio[search_start_ms:target_duration_ms]
+
+        try:
+            silences = detect_silence(
+                search_region,
+                min_silence_len=self.SMART_TRIM_MIN_SILENCE_MS,
+                silence_thresh=self.SMART_TRIM_SILENCE_THRESH_DB,
+                seek_step=10
+            )
+        except Exception:
+            silences = []
+
+        if silences:
+            # Обрезаем на начале последней паузы (конец последнего слова)
+            last_silence_start = silences[-1][0]
+            trim_point_ms = search_start_ms + last_silence_start
+
+            # Защита: trim point должен оставить >= 50% целевой длительности
+            if trim_point_ms >= target_duration_ms * 0.5:
+                trimmed = audio[:trim_point_ms]
+                fade_ms = min(self.SEGMENT_FADE_MS, len(trimmed) // 4)
+                if fade_ms > 0:
+                    trimmed = trimmed.fade_out(fade_ms)
+                self._log(
+                    f"   Сегмент {segment_index}: smart trim на {trim_point_ms}мс "
+                    f"(граница слова, сэкономлено {overflow_ms}мс)"
+                )
+                return trimmed
+
+        # Fallback: жёсткая обрезка с fade-out
+        trimmed = audio[:target_duration_ms]
+        fade_ms = min(self.SEGMENT_FADE_MS, len(trimmed) // 4)
+        if fade_ms > 0:
+            trimmed = trimmed.fade_out(fade_ms)
+        self._log(
+            f"   Сегмент {segment_index}: hard trim на {target_duration_ms}мс "
+            f"(пауза не найдена, overflow {overflow_ms}мс)"
+        )
+        return trimmed
+
     def _assemble_audio_timeline(
         self,
         segments: List[Dict],
-        total_duration_sec: float
+        total_duration_sec: float,
+        original_audio: Optional[AudioSegment] = None,
+        background_volume_db: float = -18.0
     ) -> AudioSegment:
         """
         Собирает временную линию аудио из всех сегментов.
-        
+
+        Использует Elastic Timing: каждый сегмент может расширяться в паузу
+        после него, как это делает профессиональный дублёр-синхронист.
+
+        Если передан original_audio — используется как приглушённая фоновая
+        дорожка (профессиональный дубляж: оригинал слышен на фоне).
+
         Args:
             segments: Список сегментов с audio_file и timestamps
             total_duration_sec: Общая длительность видео в секундах
-            
+            original_audio: Оригинальное аудио из видео (или None)
+            background_volume_db: Громкость фоновой дорожки в dB (по умолчанию -18)
+
         Returns:
             AudioSegment с собранным аудио
         """
-        self._log(f"🎵 Сборка аудио временной линии ({len(segments)} сегментов, общая длительность: {total_duration_sec:.1f}s)...")
-        
-        # Создаем "холст" - тихое аудио нужной длительности
+        self._log(f"🎵 Сборка аудио временной линии ({len(segments)} сегментов, {total_duration_sec:.1f}s)...")
+
+        # --- Elastic Timing: вычисляем эффективные длительности ---
+        sorted_segments = compute_effective_durations(segments, total_duration_sec=total_duration_sec)
+
+        extensions = [s.get('gap_extension', 0) for s in sorted_segments if s.get('gap_extension', 0) > 0]
+        if extensions:
+            self._log(
+                f"   Elastic timing: {len(extensions)} сегментов расширены, "
+                f"среднее +{sum(extensions)/len(extensions):.2f}s, макс +{max(extensions):.2f}s"
+            )
+
         total_duration_ms = int(total_duration_sec * 1000)
-        canvas = AudioSegment.silent(duration=total_duration_ms)
-        
+
+        # --- Фоновая дорожка: приглушённый оригинал ---
+        if original_audio is not None:
+            bg = original_audio[:total_duration_ms]
+            # Дополняем тишиной если оригинал короче видео
+            if len(bg) < total_duration_ms:
+                bg = bg + AudioSegment.silent(duration=total_duration_ms - len(bg))
+            canvas = bg.apply_gain(background_volume_db)
+            self._log(f"   Фоновая дорожка: оригинал приглушён до {background_volume_db}dB")
+        else:
+            canvas = AudioSegment.silent(duration=total_duration_ms)
+
         processed_count = 0
         error_count = 0
-        
-        for i, seg in enumerate(segments):
-            # Проверяем флаг остановки в цикле
+
+        for i, seg in enumerate(sorted_segments):
+            # Проверяем флаг остановки
             if self.should_stop_callback and self.should_stop_callback():
                 self._log("⏹️ Сборка видео прервана пользователем")
                 raise InterruptedError("Processing stopped by user")
-            
+
             audio_file = seg.get("audio_file")
             start = float(seg.get("start", 0))
             end = float(seg.get("end", start + 1.0))
-            
+            original_duration = end - start
+            effective_duration = float(seg.get("effective_duration", original_duration))
+            gap_ext = float(seg.get("gap_extension", 0.0))
+
             if not audio_file or not os.path.exists(audio_file):
                 self._log(f"⚠️ Сегмент {i}: аудио файл отсутствует, пропускаем")
                 error_count += 1
                 continue
-            
-            # Вычисляем целевую длительность для этого сегмента
-            target_duration = end - start
-            
-            # Подгоняем аудио к слоту
+
+            # Подгоняем аудио к ЭФФЕКТИВНОМУ слоту (с учётом паузы)
             processed_audio_path = self._fit_audio_to_slot(
                 audio_file,
-                target_duration,
+                effective_duration,
                 i
             )
-            
+
             try:
-                # Загружаем обработанное аудио
                 segment_audio = AudioSegment.from_file(processed_audio_path)
-                
-                # Обрезаем до целевой длительности (на случай, если все еще длиннее)
-                if len(segment_audio) > target_duration * 1000:
-                    segment_audio = segment_audio[:int(target_duration * 1000)]
-                    self._log(f"   Сегмент {i}: обрезано до {target_duration:.2f}s")
-                
-                # Накладываем на холст в нужной позиции
+
+                # Smart trim: если аудио всё ещё длиннее эффективного слота —
+                # обрезаем на границе тишины (между словами), а не посередине
+                effective_duration_ms = int(effective_duration * 1000)
+                if len(segment_audio) > effective_duration_ms:
+                    segment_audio = self._smart_trim(segment_audio, effective_duration_ms, i)
+
+                # Страховка: гарантируем что не выходим за эффективную длительность
+                if len(segment_audio) > effective_duration_ms:
+                    segment_audio = segment_audio[:effective_duration_ms]
+
+                # Fade in/out ПОСЛЕ всех обрезок — устраняет щелчки на стыках
+                fade_ms = self.SEGMENT_FADE_MS
+                if len(segment_audio) > fade_ms * 3:
+                    segment_audio = segment_audio.fade_in(fade_ms).fade_out(fade_ms)
+
+                # Накладываем на холст в ОРИГИНАЛЬНОЙ позиции
+                # Аудио естественно заходит в паузу после сегмента
                 start_ms = int(start * 1000)
                 canvas = canvas.overlay(segment_audio, position=start_ms)
-                
+
                 processed_count += 1
-                
+
+                if gap_ext > 0:
+                    self._log(
+                        f"   Сегмент {i}: {len(segment_audio)/1000:.2f}s "
+                        f"(elastic: +{gap_ext:.2f}s из паузы)"
+                    )
+
             except InterruptedError:
                 self._log("⏹️ Сборка видео прервана пользователем")
                 raise
@@ -387,25 +510,31 @@ class VideoMaker:
                 self._log(f"❌ Ошибка обработки сегмента {i}: {e}")
                 error_count += 1
                 continue
-        
-        self._log(f"✅ Временная линия собрана: {processed_count}/{len(segments)} сегментов обработано, {error_count} ошибок")
-        
+
+        self._log(
+            f"✅ Временная линия собрана: {processed_count}/{len(sorted_segments)} "
+            f"сегментов, {error_count} ошибок"
+        )
+
         return canvas
     
     def make_video(
         self,
         video_path: str,
         segments: List[Dict],
-        output_path: str
+        output_path: str,
+        background_volume_db: float = -18.0
     ) -> str:
         """
         Создает финальное дублированное видео.
-        
+
         Args:
             video_path: Путь к оригинальному видео
             segments: Список сегментов с audio_file, start, end
             output_path: Путь для сохранения результата
-            
+            background_volume_db: Громкость фоновой дорожки оригинала в dB
+                                  (-18 по умолчанию, None = без фона)
+
         Returns:
             Путь к созданному видео файлу
         """
@@ -462,10 +591,26 @@ class VideoMaker:
             video_clip = VideoFileClip(video_path_resolved)
             total_duration = video_clip.duration
             self._log(f"✅ Длительность видео: {total_duration:.1f} секунд")
-            
+
+            # Извлекаем оригинальное аудио для фоновой дорожки
+            original_audio = None
+            if background_volume_db is not None:
+                try:
+                    self._log(f"🔊 Извлечение оригинального аудио для фоновой дорожки...")
+                    original_audio = AudioSegment.from_file(video_path_resolved)
+                    self._log(f"✅ Оригинальное аудио: {len(original_audio)/1000:.1f}s")
+                except Exception as audio_err:
+                    self._log(f"⚠️ Не удалось извлечь оригинальное аудио: {audio_err}")
+                    self._log(f"   Продолжаем без фоновой дорожки")
+                    original_audio = None
+
             # ШАГ 2: Собираем аудио временную линию
             self._log(f"\n🎵 Шаг 2/4: Сборка аудио временной линии...")
-            assembled_audio = self._assemble_audio_timeline(segments, total_duration)
+            assembled_audio = self._assemble_audio_timeline(
+                segments, total_duration,
+                original_audio=original_audio,
+                background_volume_db=background_volume_db if background_volume_db is not None else -18.0
+            )
             
             # Сохраняем собранное аудио во временный файл
             temp_audio_path = self.temp_dir / "assembled_audio.wav"
@@ -525,7 +670,7 @@ class VideoMaker:
                 if _install_moviepy():
                     self._log("✅ MoviePy установлен, повторяем попытку создания видео...")
                     # Повторяем весь процесс
-                    return self.make_video(video_path_resolved, segments, output_path_resolved)
+                    return self.make_video(video_path_resolved, segments, output_path_resolved, background_volume_db)
                 else:
                     self._log(f"❌ Не удалось установить MoviePy: {error_msg}")
                     raise ImportError(

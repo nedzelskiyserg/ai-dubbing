@@ -634,7 +634,8 @@ class Transcriber:
             # Это позволяет LLM видеть переходы между спикерами даже в быстром диалоге
             # LLM в corrector.py выступит "Script Editor" и исправит спикеров по контексту
             final_segments = self._smart_sentence_split(result["segments"])
-            
+            final_segments = self._merge_speaker_turns(final_segments)
+
             # Подсчет статистики
             speakers_found = set(s.get("speaker") for s in final_segments if "speaker" in s)
             self._log(f"✅ Готово! Спикеров: {len(speakers_found)}. Сегментов: {len(final_segments)}")
@@ -815,6 +816,96 @@ class Transcriber:
             "end": end,
             "text": text.replace("  ", " ").strip(),
             "speaker": speaker
+        }
+
+    def _merge_speaker_turns(self, segments: List[Dict]) -> List[Dict]:
+        """
+        ОБЪЕДИНЕНИЕ РЕПЛИК СПИКЕРА (Speaker Turn Merging)
+
+        Объединяет последовательные короткие сегменты одного спикера
+        в длинные реплики — как это делает реальный дублёр.
+
+        Правила:
+        1. Объединять последовательные сегменты одного спикера
+        2. Разрывать при смене спикера
+        3. Разрывать если суммарная длительность > MAX_TURN_DURATION (15с)
+        4. Разрывать при паузе > MAX_PAUSE_FOR_MERGE (2.0с) — семантический разрыв
+        5. Сохранять original_segments для точной видеосборки
+        """
+        MAX_TURN_DURATION = 15.0  # Максимальная длительность объединённой реплики (сек)
+        MAX_PAUSE_FOR_MERGE = 2.0  # Максимальная пауза между сегментами для объединения (сек)
+
+        if not segments or len(segments) <= 1:
+            return segments
+
+        merged = []
+        # Текущая группа сегментов для объединения
+        group = [segments[0]]
+
+        for seg in segments[1:]:
+            prev = group[-1]
+            same_speaker = seg.get("speaker") == group[0].get("speaker")
+
+            # Пауза между концом предыдущего и началом текущего
+            gap = float(seg.get("start", 0)) - float(prev.get("end", 0))
+
+            # Суммарная длительность если добавим этот сегмент
+            group_start = float(group[0].get("start", 0))
+            new_end = float(seg.get("end", 0))
+            total_duration = new_end - group_start
+
+            # Проверяем условия объединения
+            can_merge = (
+                same_speaker
+                and gap <= MAX_PAUSE_FOR_MERGE
+                and total_duration <= MAX_TURN_DURATION
+            )
+
+            if can_merge:
+                group.append(seg)
+            else:
+                # Финализируем текущую группу
+                merged.append(self._finalize_turn(group))
+                group = [seg]
+
+        # Финализируем последнюю группу
+        if group:
+            merged.append(self._finalize_turn(group))
+
+        original_count = len(segments)
+        merged_count = len(merged)
+        multi_segs = [m for m in merged if len(m.get("original_segments", [])) > 1]
+
+        self._log(
+            f"🔗 Объединение реплик: {original_count} → {merged_count} сегментов "
+            f"({len(multi_segs)} объединённых реплик)"
+        )
+
+        return merged
+
+    def _finalize_turn(self, group: List[Dict]) -> Dict:
+        """Финализирует группу сегментов в одну реплику спикера."""
+        if len(group) == 1:
+            # Одиночный сегмент — возвращаем как есть
+            return group[0]
+
+        # Объединяем тексты
+        texts = [seg.get("text", "").strip() for seg in group if seg.get("text", "").strip()]
+        merged_text = " ".join(texts)
+
+        return {
+            "start": float(group[0].get("start", 0)),
+            "end": float(group[-1].get("end", 0)),
+            "text": merged_text,
+            "speaker": group[0].get("speaker", "SPEAKER_UNKNOWN"),
+            "original_segments": [
+                {
+                    "start": float(seg.get("start", 0)),
+                    "end": float(seg.get("end", 0)),
+                    "text": seg.get("text", "").strip()
+                }
+                for seg in group
+            ]
         }
 
     def _format_basic(self, segments: List[Dict]) -> List[Dict]:

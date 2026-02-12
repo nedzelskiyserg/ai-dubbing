@@ -749,12 +749,27 @@ class VoiceCloner:
         if missing_files:
             self._log(f"⚠️ Пропущено файлов: {len(missing_files)}")
         
-        # Объединяем все сегменты
+        # Объединяем все сегменты с плавными переходами (crossfade)
         if not audio_segments:
             raise ValueError("Нет аудио для объединения")
-        
-        self._log(f"🔗 Склейка {len(audio_segments)} сегментов...")
-        final_audio = sum(audio_segments)
+
+        CROSSFADE_MS = 30  # Мягкий переход между сегментами
+
+        self._log(f"🔗 Склейка {len(audio_segments)} сегментов с crossfade {CROSSFADE_MS}ms...")
+
+        final_audio = audio_segments[0]
+        if len(final_audio) > CROSSFADE_MS * 3:
+            final_audio = final_audio.fade_in(CROSSFADE_MS)
+
+        for seg in audio_segments[1:]:
+            safe_crossfade = min(CROSSFADE_MS, len(seg) // 3, len(final_audio) // 3)
+            if safe_crossfade > 0:
+                final_audio = final_audio.append(seg, crossfade=safe_crossfade)
+            else:
+                final_audio = final_audio + seg
+
+        if len(final_audio) > CROSSFADE_MS * 3:
+            final_audio = final_audio.fade_out(CROSSFADE_MS)
         
         # Экспортируем финальный файл
         output_path_obj = Path(output_path)

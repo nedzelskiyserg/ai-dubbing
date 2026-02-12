@@ -179,9 +179,9 @@ def postprocess_audio(audio_path: str) -> None:
         # Нормализуем громкость до -3dB (оставляем headroom)
         audio = normalize(audio, headroom=3.0)
 
-        # Добавляем короткий fade in/out для устранения щелчков
-        fade_ms = 10
-        if len(audio) > fade_ms * 2:
+        # Fade in/out для устранения щелчков на границах TTS-фрагментов
+        fade_ms = 30
+        if len(audio) > fade_ms * 3:
             audio = audio.fade_in(fade_ms).fade_out(fade_ms)
 
         # Сохраняем обратно
