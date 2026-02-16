@@ -11,6 +11,8 @@ import sys
 import time
 from pathlib import Path
 from typing import List, Dict, Optional, Callable
+import struct
+import numpy as np
 import torch
 from pydub import AudioSegment
 from core.config import APP_PATHS
@@ -547,20 +549,378 @@ class VoiceCloner:
             self._log(f"⚠️ Не удалось улучшить референс: {e}")
             return audio
     
+    def extract_speaker_samples_for_gender(
+        self,
+        audio_path: str,
+        segments: List[Dict]
+    ) -> Dict[str, str]:
+        """
+        Быстрая извлечка минимальных аудио-сэмплов только для определения пола.
+        Без тяжёлой обработки (enhance, компрессия) — нужна только pitch-детекция.
+        """
+        self._log("🔍 Быстрая извлечка аудио для определения пола спикеров...")
+
+        if not segments:
+            return {}
+
+        try:
+            audio = AudioSegment.from_file(audio_path)
+        except Exception as e:
+            self._log(f"❌ Ошибка загрузки аудио: {e}")
+            return {}
+
+        # Группируем сегменты по спикерам
+        speaker_segments = {}
+        for seg in segments:
+            speaker = seg.get("speaker", "SPEAKER_UNKNOWN")
+            if speaker not in speaker_segments:
+                speaker_segments[speaker] = []
+            speaker_segments[speaker].append(seg)
+
+        speaker_samples = {}
+
+        for speaker, segs in speaker_segments.items():
+            # Берём самый длинный сегмент (минимум 2 сек для pitch-анализа)
+            sorted_segs = sorted(
+                segs,
+                key=lambda s: float(s.get("end", 0)) - float(s.get("start", 0)),
+                reverse=True
+            )
+
+            for seg in sorted_segs:
+                start_ms = int(seg.get("start", 0) * 1000)
+                end_ms = int(seg.get("end", 0) * 1000)
+                duration = (end_ms - start_ms) / 1000.0
+
+                if duration < 2.0:
+                    continue
+
+                try:
+                    sample_audio = audio[start_ms:end_ms]
+                    # Минимальная обработка: только моно + ресэмпл
+                    sample_audio = sample_audio.set_channels(1)
+
+                    sample_path = self.voices_dir / f"{speaker}_gender_sample.wav"
+                    sample_audio.export(str(sample_path), format="wav", parameters=["-ar", "16000", "-ac", "1"])
+                    speaker_samples[speaker] = str(sample_path)
+                    self._log(f"   {speaker}: {duration:.1f}с сэмпл для анализа")
+                    break
+                except Exception:
+                    continue
+
+            if speaker not in speaker_samples:
+                self._log(f"⚠️ {speaker}: недостаточно аудио для определения пола")
+
+        return speaker_samples
+
+    # ── Preset Voices (готовые голоса) ──────────────────────────────────────
+
+    # Текст для генерации референсных сэмплов через edge-tts (≈10 секунд речи)
+    _PRESET_TEXT_MALE = (
+        "Добрый день, уважаемые зрители. Сегодня мы рассмотрим очень интересную тему, "
+        "которая касается каждого из нас. Давайте разберёмся в деталях и постараемся "
+        "понять основные принципы."
+    )
+    _PRESET_TEXT_FEMALE = (
+        "Здравствуйте, дорогие друзья. Я рада приветствовать вас на нашем канале. "
+        "Сегодня у нас важная и увлекательная тема. Надеюсь, вам будет интересно "
+        "и полезно узнать обо всём подробнее."
+    )
+
+    def _get_presets_dir(self) -> Path:
+        """Возвращает директорию для хранения пресетных голосов."""
+        presets_dir = self.voices_dir / "presets"
+        presets_dir.mkdir(parents=True, exist_ok=True)
+        return presets_dir
+
+    def _ensure_preset_voices(self) -> Dict[str, str]:
+        """
+        Проверяет наличие пресетных голосов и генерирует их через edge-tts если нет.
+
+        Returns:
+            Словарь {"male": path, "female": path}
+        """
+        presets_dir = self._get_presets_dir()
+        male_path = presets_dir / "male_ru.wav"
+        female_path = presets_dir / "female_ru.wav"
+
+        # Если оба файла уже есть — возвращаем
+        if male_path.exists() and female_path.exists():
+            self._log("✅ Пресетные голоса найдены в кэше")
+            return {"male": str(male_path), "female": str(female_path)}
+
+        self._log("📥 Генерация пресетных голосов через Microsoft Edge TTS...")
+
+        try:
+            import edge_tts
+        except ImportError:
+            self._log("📦 Установка edge-tts...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "edge-tts"])
+            import edge_tts
+
+        import asyncio
+
+        async def _generate_preset(voice: str, text: str, output_path: Path):
+            """Генерация одного пресетного голоса."""
+            mp3_path = output_path.with_suffix(".mp3")
+            communicate = edge_tts.Communicate(text, voice)
+            await communicate.save(str(mp3_path))
+            # Конвертируем MP3 → WAV (22050 Hz, mono) для XTTS
+            audio = AudioSegment.from_mp3(str(mp3_path))
+            audio = audio.set_channels(1).set_frame_rate(22050)
+            audio.export(str(output_path), format="wav")
+            mp3_path.unlink(missing_ok=True)
+
+        async def _generate_all():
+            if not male_path.exists():
+                self._log("🎤 Генерация мужского голоса (ru-RU-DmitryNeural)...")
+                await _generate_preset("ru-RU-DmitryNeural", self._PRESET_TEXT_MALE, male_path)
+                self._log(f"✅ Мужской голос сохранён: {male_path}")
+
+            if not female_path.exists():
+                self._log("🎤 Генерация женского голоса (ru-RU-SvetlanaNeural)...")
+                await _generate_preset("ru-RU-SvetlanaNeural", self._PRESET_TEXT_FEMALE, female_path)
+                self._log(f"✅ Женский голос сохранён: {female_path}")
+
+        # Запускаем async генерацию
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    pool.submit(lambda: asyncio.run(_generate_all())).result()
+            else:
+                loop.run_until_complete(_generate_all())
+        except RuntimeError:
+            asyncio.run(_generate_all())
+
+        return {"male": str(male_path), "female": str(female_path)}
+
+    def _detect_gender(self, audio_path: str) -> str:
+        """
+        Определяет пол спикера по высоте голоса (fundamental frequency).
+        Использует автокорреляцию с коррекцией октавных ошибок.
+
+        Мужской голос: F0 ≈ 85-155 Гц
+        Женский голос: F0 ≈ 165-255 Гц
+        Порог: 160 Гц
+
+        Returns:
+            "male" или "female"
+        """
+        try:
+            audio = AudioSegment.from_file(audio_path)
+            audio = audio.set_channels(1).set_frame_rate(16000).set_sample_width(2)
+
+            # Извлекаем PCM данные как numpy массив
+            samples = np.array(struct.unpack(
+                f"<{len(audio.raw_data) // 2}h", audio.raw_data
+            ), dtype=np.float64)
+
+            if len(samples) < 1600:
+                return "male"
+
+            # Нормализуем
+            samples = samples / (np.max(np.abs(samples)) + 1e-10)
+
+            sample_rate = 16000
+            # Диапазон: 60-300 Гц (покрывает и мужские и женские голоса)
+            min_lag = sample_rate // 300  # 53 сэмплов (300 Гц)
+            max_lag = sample_rate // 60   # 266 сэмплов (60 Гц)
+
+            # Фреймы по 50мс (800 сэмплов) — длиннее для надёжности на низких частотах
+            frame_size = int(sample_rate * 0.05)
+            hop_size = int(sample_rate * 0.02)
+
+            f0_values = []
+            for start in range(0, len(samples) - frame_size, hop_size):
+                frame = samples[start:start + frame_size]
+
+                # Проверяем что фрейм содержит речь (не тишина)
+                energy = np.mean(frame ** 2)
+                if energy < 0.001:
+                    continue
+
+                # Автокорреляция
+                corr = np.correlate(frame, frame, mode='full')
+                corr = corr[len(corr) // 2:]  # Правая половина
+
+                if max_lag >= len(corr):
+                    continue
+
+                # Нормализуем автокорреляцию относительно лага 0
+                if corr[0] <= 0:
+                    continue
+                corr_norm = corr / corr[0]
+
+                # Ищем пик в нужном диапазоне лагов
+                search_region = corr_norm[min_lag:max_lag + 1]
+                if len(search_region) == 0:
+                    continue
+
+                peak_idx = np.argmax(search_region) + min_lag
+                peak_val = corr_norm[peak_idx]
+
+                # Порог значимости пика
+                if peak_val < 0.25:
+                    continue
+
+                # ── Коррекция октавных ошибок ──
+                # Если нашли пик при лаге L (частота F), проверяем лаг 2*L (частота F/2).
+                # Если при 2*L тоже есть значимый пик — истинный F0 вдвое ниже.
+                # Это главная причина ложного определения мужского голоса как женского.
+                double_lag = peak_idx * 2
+                if double_lag < len(corr_norm):
+                    # Ищем пик в окрестности ±3 сэмпла от 2*lag
+                    search_lo = max(min_lag, double_lag - 3)
+                    search_hi = min(max_lag, double_lag + 3)
+                    if search_lo < search_hi and search_hi < len(corr_norm):
+                        sub_region = corr_norm[search_lo:search_hi + 1]
+                        sub_peak_val = np.max(sub_region)
+                        # Если пик на двойном лаге достаточно сильный (>70% от найденного)
+                        # → это настоящий F0, а первый пик — гармоника
+                        if sub_peak_val > peak_val * 0.7:
+                            sub_peak_idx = np.argmax(sub_region) + search_lo
+                            peak_idx = sub_peak_idx
+
+                f0 = sample_rate / peak_idx
+                if 60 <= f0 <= 300:
+                    f0_values.append(f0)
+
+            if not f0_values:
+                self._log("⚠️ Не удалось определить F0, используем мужской голос по умолчанию")
+                return "male"
+
+            # Медианная F0 (устойчива к выбросам)
+            median_f0 = float(np.median(f0_values))
+            gender = "female" if median_f0 > 160 else "male"
+            self._log(f"   🔊 F0 = {median_f0:.0f} Гц → {'женский' if gender == 'female' else 'мужской'} голос")
+            return gender
+
+        except Exception as e:
+            self._log(f"⚠️ Ошибка определения пола: {e}, используем мужской по умолчанию")
+            return "male"
+
+    def _create_pitch_variant(self, wav_path: str, semitones: float) -> str:
+        """
+        Создаёт вариант голоса со сдвигом высоты тона.
+        Аккуратный pitch shift через изменение sample rate + resample.
+
+        Args:
+            wav_path: Путь к исходному WAV
+            semitones: Сдвиг в полутонах (например, +1.5 или -1.5)
+
+        Returns:
+            Путь к модифицированному WAV файлу
+        """
+        try:
+            audio = AudioSegment.from_file(wav_path)
+
+            # Pitch shift через изменение частоты дискретизации
+            # Повышение тона: увеличиваем sample rate, потом ресэмплируем обратно
+            # Формула: new_rate = original_rate * 2^(semitones/12)
+            original_rate = audio.frame_rate
+            shift_factor = 2 ** (semitones / 12.0)
+            new_rate = int(original_rate * shift_factor)
+
+            # Меняем frame rate (это сдвигает pitch + меняет скорость)
+            shifted = audio._spawn(audio.raw_data, overrides={
+                "frame_rate": new_rate
+            })
+
+            # Возвращаем к исходной частоте (это нормализует скорость, сохраняя pitch)
+            shifted = shifted.set_frame_rate(original_rate)
+
+            # Сохраняем вариант
+            variant_name = Path(wav_path).stem + f"_variant_{semitones:+.1f}st.wav"
+            variant_path = self._get_presets_dir() / variant_name
+            shifted.export(str(variant_path), format="wav", parameters=["-ar", "22050", "-ac", "1"])
+
+            return str(variant_path)
+
+        except Exception as e:
+            self._log(f"⚠️ Ошибка создания варианта голоса: {e}")
+            return wav_path  # Возвращаем оригинал если не удалось
+
+    def _build_preset_speaker_map(
+        self,
+        speaker_samples: Dict[str, str],
+        preset_voices: Dict[str, str]
+    ) -> Dict[str, str]:
+        """
+        Строит маппинг спикеров на пресетные голоса с учётом пола.
+        Если несколько спикеров одного пола — создаёт pitch-варианты.
+
+        Args:
+            speaker_samples: Оригинальные референсы {speaker_id: wav_path}
+            preset_voices: Пресеты {"male": path, "female": path}
+
+        Returns:
+            Новый маппинг {speaker_id: preset_wav_path}
+        """
+        self._log("🔍 Определение пола спикеров...")
+
+        # Определяем пол каждого спикера
+        speaker_genders = {}
+        for speaker, sample_path in speaker_samples.items():
+            gender = self._detect_gender(sample_path)
+            speaker_genders[speaker] = gender
+            self._log(f"   {speaker}: {'👨 мужской' if gender == 'male' else '👩 женский'}")
+
+        # Группируем по полу
+        male_speakers = [s for s, g in speaker_genders.items() if g == "male"]
+        female_speakers = [s for s, g in speaker_genders.items() if g == "female"]
+
+        preset_map = {}
+
+        # Варианты pitch shift для спикеров одного пола (аккуратные сдвиги)
+        # Максимум ±2 полутона, чтобы звучало естественно
+        pitch_variants = [0, +1.5, -1.5, +2.0, -2.0]
+
+        # Назначаем мужские голоса
+        for i, speaker in enumerate(male_speakers):
+            if i == 0:
+                preset_map[speaker] = preset_voices["male"]
+            else:
+                semitones = pitch_variants[min(i, len(pitch_variants) - 1)]
+                variant = self._create_pitch_variant(preset_voices["male"], semitones)
+                preset_map[speaker] = variant
+                self._log(f"   {speaker}: мужской вариант ({semitones:+.1f} полутонов)")
+
+        # Назначаем женские голоса
+        for i, speaker in enumerate(female_speakers):
+            if i == 0:
+                preset_map[speaker] = preset_voices["female"]
+            else:
+                semitones = pitch_variants[min(i, len(pitch_variants) - 1)]
+                variant = self._create_pitch_variant(preset_voices["female"], semitones)
+                preset_map[speaker] = variant
+                self._log(f"   {speaker}: женский вариант ({semitones:+.1f} полутонов)")
+
+        # Если есть спикеры без сэмплов — назначаем мужской по умолчанию
+        if not preset_map:
+            self._log("⚠️ Не удалось определить пол спикеров, используем мужской голос")
+            preset_map["SPEAKER_UNKNOWN"] = preset_voices["male"]
+
+        self._log(f"✅ Готовые голоса назначены: {len(male_speakers)} муж., {len(female_speakers)} жен.")
+        return preset_map
+
     def generate_dubbing(
         self,
         segments: List[Dict],
         speaker_samples: Dict[str, str],
-        target_lang: str = "ru"
+        target_lang: str = "ru",
+        use_preset_voices: bool = False
     ) -> List[Dict]:
         """
         Генерирует дубляж для всех сегментов с клонированием голоса.
-        
+
         Args:
             segments: Список сегментов с переведенным текстом
             speaker_samples: Словарь {speaker_id: path_to_sample.wav}
             target_lang: Целевой язык для генерации (по умолчанию "ru")
-            
+            use_preset_voices: Использовать готовые профессиональные голоса вместо клонирования
+
         Returns:
             Обновленный список сегментов с добавленным ключом "audio_file"
         """
@@ -593,6 +953,16 @@ class VoiceCloner:
         # Загружаем модель (ленивая загрузка)
         self._load_model()
         
+        # Если включены готовые голоса — подменяем speaker_samples на пресетные
+        if use_preset_voices:
+            self._log("🎭 Режим готовых голосов: используем профессиональные пресеты")
+            try:
+                preset_voices = self._ensure_preset_voices()
+                speaker_samples = self._build_preset_speaker_map(speaker_samples, preset_voices)
+            except Exception as e:
+                self._log(f"❌ Ошибка подготовки пресетных голосов: {e}")
+                self._log("⚠️ Переключаемся на клонирование оригинальных голосов")
+
         if not speaker_samples:
             self._log("⚠️ Нет референсных аудио для спикеров")
             return segments

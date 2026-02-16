@@ -523,7 +523,8 @@ class VideoMaker:
         video_path: str,
         segments: List[Dict],
         output_path: str,
-        background_volume_db: float = -18.0
+        background_volume_db: float = -18.0,
+        instruments_path: Optional[str] = None
     ) -> str:
         """
         Создает финальное дублированное видео.
@@ -534,6 +535,8 @@ class VideoMaker:
             output_path: Путь для сохранения результата
             background_volume_db: Громкость фоновой дорожки оригинала в dB
                                   (-18 по умолчанию, None = без фона)
+            instruments_path: Путь к разделённой инструментальной дорожке (Demucs).
+                              Если указан — используется вместо приглушённого оригинала.
 
         Returns:
             Путь к созданному видео файлу
@@ -592,9 +595,21 @@ class VideoMaker:
             total_duration = video_clip.duration
             self._log(f"✅ Длительность видео: {total_duration:.1f} секунд")
 
-            # Извлекаем оригинальное аудио для фоновой дорожки
+            # Извлекаем фоновую дорожку
             original_audio = None
-            if background_volume_db is not None:
+            if instruments_path and os.path.exists(instruments_path):
+                # Используем чистые инструменты из Demucs (без речи)
+                try:
+                    self._log(f"🎸 Загрузка инструментальной дорожки (Demucs)...")
+                    original_audio = AudioSegment.from_file(instruments_path)
+                    # Инструменты без речи — можно громче чем -18дБ
+                    background_volume_db = -6.0
+                    self._log(f"✅ Инструменты: {len(original_audio)/1000:.1f}s (громкость: {background_volume_db}дБ)")
+                except Exception as audio_err:
+                    self._log(f"⚠️ Не удалось загрузить инструменты: {audio_err}")
+                    original_audio = None
+
+            if original_audio is None and background_volume_db is not None:
                 try:
                     self._log(f"🔊 Извлечение оригинального аудио для фоновой дорожки...")
                     original_audio = AudioSegment.from_file(video_path_resolved)

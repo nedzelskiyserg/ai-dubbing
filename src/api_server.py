@@ -54,6 +54,7 @@ try:
     from core.corrector import SpeakerCorrector
     from core.voice_cloner import VoiceCloner
     from core.video_maker import VideoMaker
+    from core.audio_separator import AudioSeparator
     from core.config import APP_PATHS
     # Кэш Hugging Face (Whisper, Pyannote) — в папку приложения, чтобы предзагруженная large-v3 находилась
     os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(APP_PATHS["models"]))
@@ -469,15 +470,45 @@ def process_youtube_sync(url, quality, options):
                 def check_should_stop():
                     return processing_state.get('should_stop', False)
                 
+                # Разделение вокала и инструментов (Demucs)
+                instruments_path = None
+                vocals_path = video_path
+                try:
+                    add_log("🎵 Разделение вокала от фоновой музыки (Demucs)...")
+                    separator = AudioSeparator(progress_callback=add_log)
+                    separated = separator.separate(video_path)
+                    vocals_path = separated["vocals"]
+                    instruments_path = separated.get("instruments")
+                    separator.cleanup()
+                except Exception as sep_err:
+                    add_log(f"⚠️ Demucs недоступен: {sep_err}")
+                    add_log("   Продолжаем с оригинальным аудио")
+                    vocals_path = video_path
+                    instruments_path = None
+
+                if processing_state['should_stop']:
+                    add_log("⏹️ Обработка остановлена пользователем")
+                    processing_state['is_processing'] = False
+                    processing_state['current_step'] = None
+                    processing_state['progress'] = 0
+                    return
+
                 cloner = VoiceCloner(
                     progress_callback=add_log,
                     should_stop_callback=check_should_stop
                 )
-                speaker_samples = cloner.extract_speaker_samples(
-                    video_path,
-                    segments
-                )
-                
+                use_preset = options.get('use_preset_voices', False)
+                if use_preset:
+                    speaker_samples = cloner.extract_speaker_samples_for_gender(
+                        vocals_path,
+                        segments
+                    )
+                else:
+                    speaker_samples = cloner.extract_speaker_samples(
+                        vocals_path,
+                        segments
+                    )
+
                 # Проверяем флаг остановки после извлечения образцов
                 if processing_state['should_stop']:
                     add_log("⏹️ Обработка остановлена пользователем")
@@ -485,7 +516,7 @@ def process_youtube_sync(url, quality, options):
                     processing_state['current_step'] = None
                     processing_state['progress'] = 0
                     return
-                
+
                 # Преобразуем target_lang для voice cloning (RUSSIAN -> ru)
                 lang_map = {
                     'RUSSIAN': 'ru',
@@ -507,12 +538,14 @@ def process_youtube_sync(url, quality, options):
                     'HINDI': 'hi'
                 }
                 target_lang_for_voice = lang_map.get(options.get('target_lang', 'ru').upper(), options.get('target_lang', 'ru').lower())
-                
+
                 try:
+                    use_preset = options.get('use_preset_voices', False)
                     segments_with_audio = cloner.generate_dubbing(
                         segments,
                         speaker_samples,
-                        target_lang_for_voice
+                        target_lang_for_voice,
+                        use_preset_voices=use_preset
                     )
                 except InterruptedError:
                     add_log("⏹️ Обработка остановлена пользователем")
@@ -520,7 +553,7 @@ def process_youtube_sync(url, quality, options):
                     processing_state['current_step'] = None
                     processing_state['progress'] = 0
                     return
-                
+
                 # Проверяем флаг остановки после генерации дубляжа
                 if processing_state['should_stop']:
                     add_log("⏹️ Обработка остановлена пользователем")
@@ -528,7 +561,7 @@ def process_youtube_sync(url, quality, options):
                     processing_state['current_step'] = None
                     processing_state['progress'] = 0
                     return
-                
+
                 # Сохраняем файлы озвучки в папку Downloads
                 import shutil
                 downloads_dir = APP_PATHS['downloads']
@@ -578,7 +611,8 @@ def process_youtube_sync(url, quality, options):
                     video_maker.make_video(
                         video_path,
                         segments_with_audio,
-                        output_path
+                        output_path,
+                        instruments_path=instruments_path
                     )
                 except InterruptedError:
                     add_log("⏹️ Обработка остановлена пользователем")
@@ -586,7 +620,7 @@ def process_youtube_sync(url, quality, options):
                     processing_state['current_step'] = None
                     processing_state['progress'] = 0
                     return
-                
+
                 # Проверяем флаг остановки после создания видео
                 if processing_state['should_stop']:
                     add_log("⏹️ Обработка остановлена пользователем")
@@ -1000,14 +1034,44 @@ def process_file_sync(file_path, options):
                 def check_should_stop():
                     return processing_state.get('should_stop', False)
                 
+                # Разделение вокала и инструментов (Demucs)
+                instruments_path = None
+                vocals_path = file_path
+                try:
+                    add_log("🎵 Разделение вокала от фоновой музыки (Demucs)...")
+                    separator = AudioSeparator(progress_callback=add_log)
+                    separated = separator.separate(file_path)
+                    vocals_path = separated["vocals"]
+                    instruments_path = separated.get("instruments")
+                    separator.cleanup()
+                except Exception as sep_err:
+                    add_log(f"⚠️ Demucs недоступен: {sep_err}")
+                    add_log("   Продолжаем с оригинальным аудио")
+                    vocals_path = file_path
+                    instruments_path = None
+
+                if processing_state['should_stop']:
+                    add_log("⏹️ Обработка остановлена пользователем")
+                    processing_state['is_processing'] = False
+                    processing_state['current_step'] = None
+                    processing_state['progress'] = 0
+                    return
+
                 cloner = VoiceCloner(
                     progress_callback=add_log,
                     should_stop_callback=check_should_stop
                 )
-                speaker_samples = cloner.extract_speaker_samples(
-                    file_path,
-                    segments
-                )
+                use_preset = options.get('use_preset_voices', False)
+                if use_preset:
+                    speaker_samples = cloner.extract_speaker_samples_for_gender(
+                        vocals_path,
+                        segments
+                    )
+                else:
+                    speaker_samples = cloner.extract_speaker_samples(
+                        vocals_path,
+                        segments
+                    )
                 
                 # Проверяем флаг остановки после извлечения образцов
                 if processing_state['should_stop']:
@@ -1040,10 +1104,12 @@ def process_file_sync(file_path, options):
                 target_lang_for_voice = lang_map.get(options.get('target_lang', 'ru').upper(), options.get('target_lang', 'ru').lower())
                 
                 try:
+                    use_preset = options.get('use_preset_voices', False)
                     segments_with_audio = cloner.generate_dubbing(
                         segments,
                         speaker_samples,
-                        target_lang_for_voice
+                        target_lang_for_voice,
+                        use_preset_voices=use_preset
                     )
                 except InterruptedError:
                     add_log("⏹️ Обработка остановлена пользователем")
@@ -1127,7 +1193,8 @@ def process_file_sync(file_path, options):
                     video_maker.make_video(
                         file_path,
                         segments_with_audio,
-                        output_path
+                        output_path,
+                        instruments_path=instruments_path
                     )
                 except InterruptedError:
                     add_log("⏹️ Обработка остановлена пользователем")

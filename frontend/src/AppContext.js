@@ -18,6 +18,7 @@ export const AppProvider = ({ children }) => {
     targetLang: 'RUSSIAN',
     provider: 'QUALITY API',
     voiceEnabled: false,
+    usePresetVoices: false,
   });
 
   return (

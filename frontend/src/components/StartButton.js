@@ -85,6 +85,7 @@ const StartButton = () => {
         target_lang: options.targetLang,
         provider: options.provider === 'QUALITY API' ? 'api' : 'ollama',
         voice_cloning: options.voiceEnabled,
+        use_preset_voices: options.usePresetVoices,
       };
 
       if (uploadedFile) {

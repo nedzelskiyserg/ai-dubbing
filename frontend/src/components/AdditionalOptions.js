@@ -167,6 +167,14 @@ const AdditionalOptions = () => {
                   </div>
                   <span className={`checkbox-label ${!options.voiceEnabled ? 'unchecked' : ''}`} onClick={() => updateOption('voiceEnabled', !options.voiceEnabled)}>Enable dubbing</span>
                 </div>
+                {options.voiceEnabled && (
+                  <div className="checkbox-container">
+                    <div className={`checkbox ${options.usePresetVoices ? 'checked' : ''}`} onClick={() => updateOption('usePresetVoices', !options.usePresetVoices)}>
+                      <span className="checkbox-checkmark">✓</span>
+                    </div>
+                    <span className={`checkbox-label ${!options.usePresetVoices ? 'unchecked' : ''}`} onClick={() => updateOption('usePresetVoices', !options.usePresetVoices)}>Готовые голоса</span>
+                  </div>
+                )}
                 <div className="voice-hint">
                   <span className="hint-label">[!]</span>
                   <span className="hint-text">Python 3.10+ required</span>
