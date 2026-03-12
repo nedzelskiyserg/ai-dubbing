@@ -56,11 +56,9 @@ try:
     from core.video_maker import VideoMaker
     from core.audio_separator import AudioSeparator
     from core.config import APP_PATHS
-    # Кэш Hugging Face (Whisper, Pyannote) — в папку приложения, чтобы предзагруженная large-v3 находилась
+    # Кэш Hugging Face (Whisper, Pyannote, F5-TTS) — в папку приложения
     os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(APP_PATHS["models"]))
     os.environ.setdefault("HF_HOME", str(APP_PATHS["models"]))
-    # Кэш Coqui TTS (XTTS) — тоже в папку приложения
-    os.environ.setdefault("COQUI_TTS_CACHE", str(APP_PATHS["models"] / "tts"))
 except Exception:
     # В упакованном exe при падении на импорте пишем лог — пользователь не видит консоль
     if getattr(sys, "frozen", False):
@@ -352,10 +350,16 @@ def process_youtube_sync(url, quality, options):
                             progress_callback=add_log,
                             should_stop_callback=check_should_stop
                         )
+                        # Нормализуем source_lang: 'AUTO' → None для автоопределения
+                        src_lang = options.get('language')
+                        if src_lang and src_lang.upper() == 'AUTO':
+                            src_lang = None
+                        elif src_lang:
+                            src_lang = src_lang.lower()
                         translated_segments = smart_translator.translate_segments(
                             segments,
                             target_lang=target_lang_code,
-                            source_lang=options.get('language')
+                            source_lang=src_lang
                         )
                     except RuntimeError as e:
                         # Ollama не доступен — fallback на обычный перевод
@@ -612,7 +616,8 @@ def process_youtube_sync(url, quality, options):
                         video_path,
                         segments_with_audio,
                         output_path,
-                        instruments_path=instruments_path
+                        instruments_path=instruments_path,
+                        vocals_path=vocals_path,
                     )
                 except InterruptedError:
                     add_log("⏹️ Обработка остановлена пользователем")
@@ -1194,7 +1199,8 @@ def process_file_sync(file_path, options):
                         file_path,
                         segments_with_audio,
                         output_path,
-                        instruments_path=instruments_path
+                        instruments_path=instruments_path,
+                        vocals_path=vocals_path,
                     )
                 except InterruptedError:
                     add_log("⏹️ Обработка остановлена пользователем")

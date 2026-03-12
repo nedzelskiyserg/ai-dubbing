@@ -1,368 +1,435 @@
 # -*- coding: utf-8 -*-
 """
-Voice Cloning Module using Coqui XTTS v2
-Генерация дубляжа с клонированием голоса спикеров
+Voice Cloning Module using F5-TTS — Intelligent Dubbing Engine
+
+Генерация дубляжа с клонированием голоса спикеров.
+Интеллектуальная система синхронизации:
+  - Timing-aware TTS: знает бюджет времени для каждого сегмента
+  - Adaptive retry: если аудио слишком длинное, сокращает текст и перегенерирует
+  - Elastic timing: расширяется в паузы между фразами как профессиональный дублёр
+  - Фактические длительности сохраняются для адаптивной сборки в VideoMaker
+
+F5-TTS: Diffusion Transformer + ConvNeXt V2, Flow Matching
+- Английский: F5TTS_v1_Base (SWivid/F5-TTS, auto-download ~3GB)
+- Русский: Misha24-10/F5-TTS_RUSSIAN v2 (community model)
+- RUAccent: русские ударения для естественного произношения
 """
 import os
-import logging
-import subprocess
-import json
+import re
 import sys
 import time
-from pathlib import Path
-from typing import List, Dict, Optional, Callable
 import struct
+from pathlib import Path
+from typing import List, Dict, Optional, Callable, Tuple
+
 import numpy as np
-import torch
+import soundfile as sf
 from pydub import AudioSegment
 from core.config import APP_PATHS
 
-# Перенаправляем кэш Coqui TTS в папку приложения (до импорта TTS!)
-_tts_cache_dir = str(APP_PATHS["models"] / "tts")
-os.environ.setdefault("COQUI_TTS_CACHE", _tts_cache_dir)
+# ── Constants ──────────────────────────────────────────────────────────────
 
-# Пытаемся импортировать TTS (поддерживаем и старый TTS, и новый coqui-tts)
-TTS_AVAILABLE = False
-TTS = None
-TTS_ERROR = None
+# F5-TTS quality settings (confirmed optimal)
+F5_NFE_STEP = 48          # default 32, higher = cleaner but slower
+F5_CFG_STRENGTH = 2.0     # classifier-free guidance
+F5_SWAY_COEF = -1.0       # sway sampling coefficient
+F5_SEED = 123             # best prosody seed (confirmed by testing)
 
-try:
-    # Пробуем импортировать TTS API
-    from TTS.api import TTS
-    TTS_AVAILABLE = True
+# F5-TTS sample rate
+F5_SAMPLE_RATE = 24000
 
-    # Патчим директорию кэша моделей на папку приложения
-    try:
-        import TTS.utils.manage as _tts_manage
-        _original_get_user_data_dir = _tts_manage.get_user_data_dir
-        def _patched_get_user_data_dir(appname):
-            custom = os.environ.get("COQUI_TTS_CACHE")
-            if custom and appname == "tts":
-                os.makedirs(custom, exist_ok=True)
-                return custom
-            return _original_get_user_data_dir(appname)
-        _tts_manage.get_user_data_dir = _patched_get_user_data_dir
-    except Exception:
-        pass  # Не критично — модель скачается в стандартную папку
+# Reference audio constraints
+MAX_REF_DURATION_SEC = 12.0   # F5-TTS supports up to 12s reference
+MIN_TEXT_CHARS = 10
 
-except ImportError as e:
-    # TTS не установлен
-    TTS_AVAILABLE = False
-    TTS = None
-    TTS_ERROR = f"ImportError: {str(e)}"
-except (TypeError, SyntaxError) as e:
-    # Ошибки совместимости Python версии (обычно Python < 3.10)
-    TTS_AVAILABLE = False
-    TTS = None
-    TTS_ERROR = f"CompatibilityError: {str(e)}"
-except Exception as e:
-    # Другие неожиданные ошибки
-    TTS_AVAILABLE = False
-    TTS = None
-    TTS_ERROR = f"UnexpectedError: {str(e)}"
+# Russian model (Misha24-10/F5-TTS_RUSSIAN)
+RU_MODEL_REPO = "Misha24-10/F5-TTS_RUSSIAN"
+RU_VOCAB_PATH = "F5TTS_v1_Base/vocab.txt"
+RU_CKPT_PATH = "F5TTS_v1_Base_v2/model_last_inference.safetensors"
 
-# Максимальное количество попыток загрузки модели (при сетевых ошибках)
-MAX_MODEL_LOAD_RETRIES = 5
+# Languages that use the Russian model
+RU_LANGS = {"ru"}
 
+# ── Timing-aware TTS constants ────────────────────────────────────────────
 
-def _cleanup_tts_partial_download():
-    """Удаляет частично скачанные файлы модели XTTS перед повторной попыткой."""
-    import shutil
-    cache_dir = os.environ.get("COQUI_TTS_CACHE", "")
-    if not cache_dir or not os.path.isdir(cache_dir):
-        return
-    model_dir = os.path.join(cache_dir, "tts_models--multilingual--multi-dataset--xtts_v2")
-    if os.path.exists(model_dir):
-        has_config = os.path.exists(os.path.join(model_dir, "config.json"))
-        has_model = any(f.endswith(".pth") for f in os.listdir(model_dir)) if os.path.isdir(model_dir) else False
-        if not (has_config and has_model):
-            try:
-                shutil.rmtree(model_dir)
-            except Exception:
-                pass
-    # Чистим .zip промежуточные файлы
-    for f in os.listdir(cache_dir):
-        if f.endswith(".zip") and "xtts" in f.lower():
-            try:
-                os.unlink(os.path.join(cache_dir, f))
-            except Exception:
-                pass
+# Maximum atempo speedup that VideoMaker can apply without quality loss
+MAX_ATEMPO_TOLERANCE = 1.10
+
+# Timing retry: max retries when TTS audio exceeds time budget
+MAX_TIMING_RETRIES = 2
+
+# Timing tolerance: how much over budget is acceptable (VideoMaker handles via atempo)
+# 1.08 means we accept audio up to 8% longer than budget (VideoMaker uses gentle atempo)
+TIMING_TOLERANCE_RATIO = 1.08
 
 
 class VoiceCloner:
     """
-    Класс для клонирования голоса и генерации дубляжа с использованием Coqui XTTS v2.
+    Клонирование голоса и генерация дубляжа через F5-TTS.
+
+    Интеллектуальная система синхронизации:
+    1. Вычисляет бюджет времени для каждого сегмента (elastic timing)
+    2. Генерирует TTS и проверяет фактическую длительность
+    3. Если превышение > 8%: сокращает текст и перегенерирует (до 2 раз)
+    4. Сохраняет фактические длительности для адаптивной сборки VideoMaker
     """
-    
+
     def __init__(
         self,
-        model_name: str = "tts_models/multilingual/multi-dataset/xtts_v2",
         progress_callback: Optional[Callable[[str], None]] = None,
         should_stop_callback: Optional[Callable[[], bool]] = None
     ):
-        """
-        Инициализация VoiceCloner.
-        
-        Args:
-            model_name: Название модели XTTS (по умолчанию xtts_v2)
-            progress_callback: Функция для логирования прогресса
-        """
-        # Подавляем промпт лицензии
-        os.environ["COQUI_TOS_AGREED"] = "1"
-        
-        self.model_name = model_name
         self.progress_callback = progress_callback
         self.should_stop_callback = should_stop_callback
-        self.model = None
-        
+
+        # F5-TTS models (lazy loaded)
+        self._tts_en = None
+        self._tts_ru = None
+
+        # RUAccent instance (lazy loaded, reused)
+        self._accentizer = None
+
+        # Speaker reference texts (extracted from transcription segments)
+        self._speaker_ref_texts: Dict[str, str] = {}
+
         # Определяем устройство
         self.device = self._detect_device()
-        
-        # Создаем необходимые директории (используем безопасные пути из config)
+
+        # Создаем необходимые директории
         self.voices_dir = APP_PATHS['base'] / "voices"
         try:
             self.voices_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
-            self._log(f"⚠️ Ошибка создания папки voices: {e}")
-            
+            self._log(f"Warning: cannot create voices dir: {e}")
+
         self.temp_tts_dir = APP_PATHS['temp'] / "tts_parts"
         try:
             self.temp_tts_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
-            self._log(f"⚠️ Ошибка создания папки temp/tts_parts: {e}")
-        
-        # Проверяем наличие venv_tts для использования через subprocess
-        self.venv_tts_path = self._find_venv_tts()
-        self.use_venv_tts = self.venv_tts_path is not None and not TTS_AVAILABLE
-        
-        if self.use_venv_tts:
-            self._log(f"🎤 VoiceCloner инициализирован (устройство: {self.device}, используется venv_tts)")
-        else:
-            self._log(f"🎤 VoiceCloner инициализирован (устройство: {self.device})")
-    
+            self._log(f"Warning: cannot create temp/tts_parts dir: {e}")
+
+        self._log(f"VoiceCloner initialized (F5-TTS, device: {self.device})")
+
     def _log(self, msg: str):
         """Логирование в UI и консоль"""
         print(msg)
         if self.progress_callback:
             self.progress_callback(msg)
-    
+
     def _detect_device(self) -> str:
-        """
-        Определяет устройство для TTS.
-        Для Mac (Apple Silicon) используем CPU по умолчанию для стабильности.
-        """
+        """Определяет устройство: CUDA > MPS > CPU."""
+        import torch
+
         if torch.cuda.is_available():
             gpu_name = torch.cuda.get_device_name(0)
-            self._log(f"🟢 NVIDIA GPU: {gpu_name} (CUDA {torch.version.cuda})")
+            vram_gb = torch.cuda.get_device_properties(0).total_mem / (1024**3)
+            self._log(f"NVIDIA GPU: {gpu_name} ({vram_gb:.1f} GB VRAM, CUDA {torch.version.cuda})")
             return "cuda"
 
-        # Диагностика: почему CUDA не доступна
+        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            self._log("Apple Silicon GPU (MPS)")
+            return "mps"
+
         cuda_built = getattr(torch.version, 'cuda', None)
         if cuda_built:
-            self._log(f"⚠️ PyTorch собран с CUDA {cuda_built}, но GPU не обнаружен. Проверьте драйверы NVIDIA.")
+            self._log(f"PyTorch built with CUDA {cuda_built}, but no GPU detected. Using CPU.")
         elif sys.platform == 'win32':
-            self._log("⚠️ PyTorch установлен без CUDA. TTS будет работать на CPU (медленнее).")
-
-        # Для Mac проверяем MPS, но по умолчанию используем CPU для стабильности
-        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-            return "cpu"
+            self._log("PyTorch installed without CUDA. TTS will run on CPU (slower).")
 
         return "cpu"
-    
-    def _find_venv_tts(self) -> Optional[Path]:
-        """
-        Ищет venv_tts в текущей директории или родительских.
-        """
-        current = Path.cwd()
-        
-        # Проверяем текущую директорию
-        venv_path = current / "venv_tts" / "bin" / "python3"
-        if venv_path.exists():
-            return venv_path
-        
-        # Проверяем родительские директории (до 3 уровней вверх)
-        for i in range(3):
-            parent = current.parent if i > 0 else current
-            venv_path = parent / "venv_tts" / "bin" / "python3"
-            if venv_path.exists():
-                return venv_path
-        
-        return None
-    
-    def _load_model(self):
-        """Ленивая загрузка модели XTTS с retry при сетевых ошибках"""
-        if self.model is not None:
+
+    # ── F5-TTS Engine ──────────────────────────────────────────────────────
+
+    def _load_model(self, lang: str = "en"):
+        """Ленивая загрузка F5-TTS модели."""
+        is_russian = lang in RU_LANGS
+
+        if is_russian and self._tts_ru is not None:
+            return
+        if not is_russian and self._tts_en is not None:
             return
 
-        # Если используем venv_tts через subprocess, модель не загружаем
-        if self.use_venv_tts:
-            self._log(f"✅ Используется venv_tts для генерации TTS (Python 3.11+)")
-            return
+        from f5_tts.api import F5TTS
 
-        if not TTS_AVAILABLE:
-            import sys
-            python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+        if is_russian:
+            self._log("Loading F5-TTS Russian model (Misha24-10 v2)...")
+            load_start = time.time()
 
-            error_msg = (
-                f"❌ TTS (Coqui TTS) недоступен.\n"
-                f"   Текущая версия Python: {python_version}\n"
-                f"   Требуется: Python 3.10+\n\n"
+            from huggingface_hub import hf_hub_download
+            vocab_path = hf_hub_download(RU_MODEL_REPO, RU_VOCAB_PATH)
+            ckpt_path = hf_hub_download(RU_MODEL_REPO, RU_CKPT_PATH)
+
+            self._tts_ru = F5TTS(
+                model="F5TTS_v1_Base",
+                ckpt_file=ckpt_path,
+                vocab_file=vocab_path,
+                device=self.device,
             )
 
-            if TTS_ERROR:
-                error_msg += f"   Ошибка: {TTS_ERROR}\n\n"
+            load_time = time.time() - load_start
+            self._log(f"F5-TTS Russian model loaded in {load_time:.1f}s")
+        else:
+            self._log("Loading F5-TTS English model (F5TTS_v1_Base)...")
+            load_start = time.time()
 
-            error_msg += (
-                "💡 Автоматическая установка:\n"
-                "   Запустите: ./setup_voice_cloning.sh\n\n"
-                "   Или вручную:\n"
-                "   1. brew install python@3.11\n"
-                "   2. python3.11 -m venv venv_tts\n"
-                "   3. source venv_tts/bin/activate\n"
-                "   4. pip install coqui-tts pydub\n"
+            self._tts_en = F5TTS(
+                model="F5TTS_v1_Base",
+                device=self.device,
             )
 
-            raise ImportError(error_msg)
+            load_time = time.time() - load_start
+            self._log(f"F5-TTS English model loaded in {load_time:.1f}s")
 
-        self._log(f"📦 Загрузка модели XTTS: {self.model_name}...")
+        # CUDA memory optimization
+        if self.device == "cuda":
+            import torch
+            torch.cuda.empty_cache()
 
-        last_error = None
-        for attempt in range(1, MAX_MODEL_LOAD_RETRIES + 1):
+    def _get_tts(self, lang: str):
+        """Возвращает загруженную модель для языка."""
+        if lang in RU_LANGS:
+            self._load_model("ru")
+            return self._tts_ru
+        else:
+            self._load_model("en")
+            return self._tts_en
+
+    def _get_accentizer(self):
+        """Ленивая загрузка RUAccent (переиспользуется для всех сегментов)."""
+        if self._accentizer is None:
             try:
-                if attempt > 1:
-                    _cleanup_tts_partial_download()
-                self.model = TTS(model_name=self.model_name, progress_bar=False)
-                self.model.to(self.device)
-                self._log(f"✅ Модель XTTS загружена на {self.device}")
-                return
+                from ruaccent import RUAccent
+                self._accentizer = RUAccent()
+                self._accentizer.load(omograph_model_size='turbo', use_dictionary=True)
             except Exception as e:
-                err_str = str(e).lower()
-                is_network = (
-                    isinstance(e, (ConnectionError, OSError, TimeoutError))
-                    or any(kw in err_str for kw in [
-                        "download", "connection", "timeout", "urllib3",
-                        "requests", "ssl", "socket", "network", "failed to download",
-                    ])
-                )
-                last_error = e
-                if is_network and attempt < MAX_MODEL_LOAD_RETRIES:
-                    wait = 10 * (2 ** (attempt - 1))  # 10, 20, 40, 80 сек
-                    self._log(
-                        f"⚠️ Попытка {attempt}/{MAX_MODEL_LOAD_RETRIES} не удалась (сеть): {e}\n"
-                        f"   Повтор через {wait} сек..."
-                    )
-                    time.sleep(wait)
-                else:
-                    if is_network:
-                        self._log(
-                            f"❌ Не удалось скачать модель XTTS после {MAX_MODEL_LOAD_RETRIES} попыток.\n"
-                            f"   Ошибка: {e}\n"
-                            f"   Проверьте интернет-соединение и попробуйте снова."
-                        )
-                    else:
-                        self._log(f"❌ Ошибка загрузки модели XTTS: {e}")
-                    raise
+                self._log(f"   Warning: RUAccent init error: {e}")
+                return None
+        return self._accentizer
 
-        raise RuntimeError(
-            f"Не удалось загрузить модель XTTS после {MAX_MODEL_LOAD_RETRIES} попыток: {last_error}"
-        )
-    
-    def _generate_tts_via_venv(self, text: str, speaker_wav: str, output_path: str, language: str, segment_index: int = None, total_segments: int = None, tts_speed: float = 1.0) -> bool:
+    def _add_stress_marks(self, text: str) -> str:
+        """Добавляет ударения в русский текст через RUAccent."""
+        accentizer = self._get_accentizer()
+        if accentizer is None:
+            return text
+        try:
+            return accentizer.process_all(text)
+        except Exception as e:
+            self._log(f"   Warning: RUAccent error: {e}")
+            return text
+
+    def _preprocess_text(self, text: str, lang: str) -> str:
+        """Предобработка текста перед TTS (ударения для русского)."""
+        if lang in RU_LANGS:
+            return self._add_stress_marks(text)
+        return text
+
+    def _run_tts(self, text: str, ref_file: str, ref_text: str,
+                 lang: str = "en", seed: int = F5_SEED) -> Optional[np.ndarray]:
         """
-        Генерирует TTS через venv_tts используя subprocess.
-
-        Args:
-            text: Текст для генерации
-            speaker_wav: Референсное аудио
-            output_path: Путь для сохранения
-            language: Язык
-            segment_index: Индекс сегмента (для логирования)
-            total_segments: Всего сегментов (для логирования)
-            tts_speed: Скорость речи (1.0 = нормально, до 1.15 для ускорения)
+        Генерирует речь через F5-TTS.
 
         Returns:
-            True если успешно, False если ошибка
+            numpy array с аудио (24kHz) или None при ошибке
         """
-        if not self.venv_tts_path:
-            return False
-        
-        # Путь к скрипту-воркеру (используем абсолютный путь для надежности)
-        worker_script = Path(__file__).parent.absolute() / "tts_worker.py"
-        
-        if not worker_script.exists():
-            self._log(f"❌ Скрипт tts_worker.py не найден: {worker_script}")
-            return False
-        
-        start_time = time.time()
-        
-        try:
-            # Подготавливаем данные для передачи
-            input_data = {
-                "text": text,
-                "speaker_wav": speaker_wav,
-                "output_path": output_path,
-                "language": language,
-                "model_name": self.model_name,
-                "tts_speed": tts_speed
-            }
-            
-            # Добавляем информацию о сегменте для логирования в worker
-            if segment_index is not None and total_segments is not None:
-                input_data["segment_info"] = {
-                    "index": segment_index + 1,
-                    "total": total_segments
-                }
-            
-            # Запускаем скрипт через venv_tts Python
-            result = subprocess.run(
-                [str(self.venv_tts_path), str(worker_script)],
-                input=json.dumps(input_data),
-                capture_output=True,
-                text=True,
-                timeout=300  # 5 минут максимум на сегмент
+        tts = self._get_tts(lang)
+
+        processed_text = self._preprocess_text(text, lang)
+        processed_ref_text = self._preprocess_text(ref_text, lang)
+
+        wav, sr, _ = tts.infer(
+            ref_file=ref_file,
+            ref_text=processed_ref_text,
+            gen_text=processed_text,
+            nfe_step=F5_NFE_STEP,
+            cfg_strength=F5_CFG_STRENGTH,
+            sway_sampling_coef=F5_SWAY_COEF,
+            seed=seed,
+        )
+
+        if wav is None or len(wav) == 0:
+            return None
+
+        return wav
+
+    # ── Intelligent Timing: TTS + Retry ────────────────────────────────────
+
+    def _generate_with_timing(
+        self,
+        text: str,
+        ref_file: str,
+        ref_text: str,
+        lang: str,
+        time_budget_sec: float,
+        segment_index: int,
+    ) -> Tuple[Optional[np.ndarray], float, str]:
+        """
+        Генерирует TTS с учётом бюджета времени. Если слишком длинное —
+        сокращает текст и перегенерирует.
+
+        Стратегия:
+          1. Генерируем TTS с полным текстом
+          2. Если длительность <= budget * TIMING_TOLERANCE_RATIO → OK
+             (VideoMaker справится через gentle atempo ≤ 1.08x)
+          3. Если длиннее → сокращаем текст пропорционально и перегенерируем
+          4. Максимум MAX_TIMING_RETRIES попыток
+
+        Args:
+            text: Текст для синтеза
+            ref_file: Путь к референсному WAV
+            ref_text: Транскрипция референса
+            lang: Язык генерации
+            time_budget_sec: Бюджет времени (effective_duration)
+            segment_index: Индекс сегмента (для логов)
+
+        Returns:
+            Tuple (wav_array, actual_duration, final_text)
+        """
+        current_text = text
+        max_acceptable = time_budget_sec * TIMING_TOLERANCE_RATIO
+
+        for attempt in range(MAX_TIMING_RETRIES + 1):
+            wav = self._run_tts(
+                text=current_text,
+                ref_file=ref_file,
+                ref_text=ref_text,
+                lang=lang,
             )
-            
-            # Логируем stderr (там выводятся сообщения из worker)
-            if result.stderr:
-                for line in result.stderr.strip().split('\n'):
-                    if line.strip():
-                        self._log(line)
-            
-            if result.returncode != 0:
-                self._log(f"❌ Ошибка subprocess (код {result.returncode}): {result.stderr}")
-                return False
-            
-            # Парсим результат
-            output = json.loads(result.stdout)
-            
-            if not output.get("success"):
-                self._log(f"❌ Ошибка генерации TTS: {output.get('error', 'Unknown error')}")
-                return False
-            
-            # Логируем время выполнения
-            total_time = time.time() - start_time
-            load_time = output.get("load_time", 0)
-            gen_time = output.get("gen_time", 0)
-            
-            if segment_index is not None and total_segments is not None:
-                progress = ((segment_index + 1) / total_segments) * 100
-                if load_time > 0:
-                    self._log(f"   ⏱️ Время: загрузка {load_time:.1f}с + генерация {gen_time:.1f}с = {total_time:.1f}с | Прогресс: {progress:.1f}%")
+
+            if wav is None:
+                return None, 0.0, current_text
+
+            actual_duration = len(wav) / F5_SAMPLE_RATE
+
+            # Проверяем: укладываемся ли в бюджет?
+            if actual_duration <= max_acceptable:
+                if attempt > 0:
+                    self._log(
+                        f"   Retry {attempt} OK: {actual_duration:.1f}s "
+                        f"(budget: {time_budget_sec:.1f}s)"
+                    )
+                return wav, actual_duration, current_text
+
+            # Превышение — нужно сокращать
+            overshoot = actual_duration / time_budget_sec
+
+            if attempt < MAX_TIMING_RETRIES:
+                # Сокращаем текст пропорционально превышению
+                target_ratio = time_budget_sec / actual_duration * 0.92  # 8% запас
+                shortened = self._shorten_text_for_timing(current_text, target_ratio, lang)
+
+                if shortened != current_text and len(shortened) >= MIN_TEXT_CHARS:
+                    self._log(
+                        f"   Seg {segment_index}: {actual_duration:.1f}s > "
+                        f"{time_budget_sec:.1f}s budget ({overshoot:.0%}), "
+                        f"retry {attempt+1} with shortened text "
+                        f"({len(current_text)}→{len(shortened)} chars)"
+                    )
+                    current_text = shortened
                 else:
-                    self._log(f"   ⏱️ Время: генерация {gen_time:.1f}с (модель уже загружена) | Прогресс: {progress:.1f}%")
-            
-            return True
-            
-        except subprocess.TimeoutExpired:
-            self._log(f"❌ Таймаут генерации TTS (превышено 5 минут)")
-            return False
-        except json.JSONDecodeError as e:
-            self._log(f"❌ Ошибка парсинга результата: {e}")
-            return False
+                    # Не удалось сократить — возвращаем что есть
+                    break
+            else:
+                # Все ретраи исчерпаны
+                self._log(
+                    f"   Seg {segment_index}: {actual_duration:.1f}s > "
+                    f"{time_budget_sec:.1f}s budget ({overshoot:.0%}) "
+                    f"after {MAX_TIMING_RETRIES} retries, "
+                    f"VideoMaker will handle via atempo/trim"
+                )
+
+        return wav, actual_duration, current_text
+
+    def _shorten_text_for_timing(self, text: str, target_ratio: float, lang: str) -> str:
+        """
+        Интеллектуально сокращает текст до target_ratio от текущей длины.
+
+        Стратегии (в порядке приоритета):
+          1. Убрать последнее предложение (если несколько)
+          2. Убрать содержимое в скобках / вставные конструкции
+          3. Убрать вводные слова / филлеры
+          4. Обрезать по словам с сохранением завершённости
+
+        Args:
+            text: Исходный текст
+            target_ratio: Целевое соотношение (0.0-1.0)
+            lang: Язык текста
+
+        Returns:
+            Сокращённый текст
+        """
+        target_len = max(MIN_TEXT_CHARS, int(len(text) * target_ratio))
+
+        # Стратегия 1: Убрать последнее предложение (если несколько)
+        sentences = re.split(r'(?<=[.!?。！？])\s+', text.strip())
+        if len(sentences) > 1:
+            shorter = ' '.join(sentences[:-1])
+            if len(shorter) >= target_len * 0.7:
+                return shorter
+            # Попробуем убрать 2 последних
+            if len(sentences) > 2:
+                shorter = ' '.join(sentences[:-2])
+                if len(shorter) >= target_len * 0.7:
+                    return shorter
+
+        # Стратегия 2: Убрать содержимое в скобках и вставные конструкции
+        cleaned = re.sub(r'\s*[\(\（][^)）]*[\)）]\s*', ' ', text)
+        cleaned = re.sub(r'\s*[—–]\s*[^—–]*?[—–]\s*', ' ', cleaned)
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        if len(cleaned) < len(text) * 0.95 and len(cleaned) >= target_len * 0.7:
+            return cleaned
+
+        # Стратегия 3: Обрезка по словам на границе предложения/клаузы
+        words = text.split()
+        target_words = max(3, int(len(words) * target_ratio))
+        truncated = ' '.join(words[:target_words])
+
+        # Пытаемся оборвать на знаке препинания
+        for punct in ['.', '!', '?', '。', '！', '？', ',', ';', '，', '；']:
+            last_pos = truncated.rfind(punct)
+            if last_pos > len(truncated) * 0.5:
+                return truncated[:last_pos + 1].strip()
+
+        # Обрезаем на последнем полном слове
+        return truncated.rstrip(',:;').strip()
+
+    def _postprocess_audio(self, audio_path: str):
+        """Постобработка: шумоподавление, нормализация, fade in/out."""
+        try:
+            # Noise reduction
+            try:
+                import noisereduce as nr
+                from scipy.io import wavfile
+
+                sample_rate, audio_data = wavfile.read(audio_path)
+                if audio_data.dtype == np.int16:
+                    audio_float = audio_data.astype(np.float32) / 32768.0
+                elif audio_data.dtype == np.int32:
+                    audio_float = audio_data.astype(np.float32) / 2147483648.0
+                else:
+                    audio_float = audio_data.astype(np.float32)
+
+                reduced = nr.reduce_noise(
+                    y=audio_float, sr=sample_rate,
+                    stationary=True, prop_decrease=0.75,
+                    n_fft=512, hop_length=128
+                )
+                wavfile.write(audio_path, sample_rate, (reduced * 32767).astype(np.int16))
+            except ImportError:
+                pass
+
+            # Normalize + fade
+            from pydub.effects import normalize as pydub_normalize
+            audio = AudioSegment.from_file(audio_path)
+            audio = pydub_normalize(audio, headroom=3.0)
+            fade_ms = 30
+            if len(audio) > fade_ms * 3:
+                audio = audio.fade_in(fade_ms).fade_out(fade_ms)
+            audio.export(audio_path, format="wav")
         except Exception as e:
-            self._log(f"❌ Ошибка subprocess: {e}")
-            return False
-    
+            self._log(f"   Warning: postprocess error: {e}")
+
+    # ── Speaker Sample Extraction ──────────────────────────────────────────
+
     def extract_speaker_samples(
         self,
         audio_path: str,
@@ -371,29 +438,23 @@ class VoiceCloner:
         """
         Извлекает референсные аудио для каждого уникального спикера.
 
-        XTTS v2 работает лучше с референсами 6-12 секунд чистой речи.
-        Стратегия: объединяем несколько коротких сегментов одного спикера,
-        чтобы получить более длинный и качественный референс.
-
-        Args:
-            audio_path: Путь к исходному аудио файлу
-            segments: Список сегментов с информацией о спикерах и таймингах
+        F5-TTS работает лучше с референсами до 12 секунд чистой речи.
+        Также сохраняет текст референсного сегмента для точного ref_text.
 
         Returns:
             Словарь {speaker_id: path_to_sample.wav}
         """
-        self._log(f"🎯 Извлечение референсных аудио для спикеров...")
+        self._log("Extracting speaker reference audio...")
 
         if not segments:
-            self._log("⚠️ Нет сегментов для обработки")
+            self._log("No segments to process")
             return {}
 
-        # Загружаем исходное аудио
         try:
             audio = AudioSegment.from_file(audio_path)
-            self._log(f"✅ Исходное аудио загружено: {len(audio) / 1000:.1f} сек")
+            self._log(f"Source audio loaded: {len(audio) / 1000:.1f} sec")
         except Exception as e:
-            self._log(f"❌ Ошибка загрузки аудио: {e}")
+            self._log(f"Error loading audio: {e}")
             return {}
 
         # Группируем сегменты по спикерам
@@ -404,24 +465,20 @@ class VoiceCloner:
                 speaker_segments[speaker] = []
             speaker_segments[speaker].append(seg)
 
-        self._log(f"📊 Найдено спикеров: {len(speaker_segments)}")
+        self._log(f"Found {len(speaker_segments)} speakers")
 
         speaker_samples = {}
 
-        # Оптимальные параметры для XTTS v2
-        MIN_REFERENCE_DURATION = 6.0    # Минимум 6 секунд для хорошего клонирования
-        MAX_REFERENCE_DURATION = 15.0   # Максимум 15 секунд (больше не нужно)
-        IDEAL_SEGMENT_DURATION = (4.0, 12.0)  # Идеальный диапазон одного сегмента
+        IDEAL_SEGMENT_DURATION = (3.0, 12.0)
 
         for speaker, segs in speaker_segments.items():
-            # Сортируем сегменты по длительности (длинные первые)
             sorted_segs = sorted(
                 segs,
                 key=lambda s: float(s.get("end", 0)) - float(s.get("start", 0)),
                 reverse=True
             )
 
-            # Стратегия 1: ищем один идеальный сегмент (4-12 секунд)
+            # Стратегия 1: один идеальный сегмент (3-12 секунд)
             best_single_seg = None
             for seg in sorted_segs:
                 duration = float(seg.get("end", 0)) - float(seg.get("start", 0))
@@ -430,7 +487,6 @@ class VoiceCloner:
                     break
 
             if best_single_seg:
-                # Нашли идеальный одиночный сегмент
                 start_ms = int(best_single_seg.get("start", 0) * 1000)
                 end_ms = int(best_single_seg.get("end", 0) * 1000)
                 duration = (end_ms - start_ms) / 1000.0
@@ -440,125 +496,109 @@ class VoiceCloner:
                     sample_audio = self._enhance_reference_audio(sample_audio)
 
                     sample_path = self.voices_dir / f"{speaker}_sample.wav"
-                    sample_audio.export(str(sample_path), format="wav", parameters=["-ar", "22050", "-ac", "1"])
+                    sample_audio.export(str(sample_path), format="wav",
+                                       parameters=["-ar", "24000", "-ac", "1"])
 
                     speaker_samples[speaker] = str(sample_path)
-                    self._log(f"✅ Референс для {speaker}: {duration:.1f}с (идеальный сегмент)")
+
+                    ref_text = best_single_seg.get("text", "").strip()
+                    if ref_text:
+                        self._speaker_ref_texts[speaker] = ref_text
+
+                    self._log(f"   {speaker}: {duration:.1f}s reference (ideal segment)")
                     continue
                 except Exception as e:
-                    self._log(f"⚠️ Ошибка извлечения сегмента для {speaker}: {e}")
+                    self._log(f"   Warning: error extracting for {speaker}: {e}")
 
-            # Стратегия 2: объединяем несколько сегментов до нужной длины
+            # Стратегия 2: объединяем несколько сегментов
             combined_audio = AudioSegment.empty()
             combined_duration = 0.0
             segments_used = 0
+            combined_texts = []
 
             for seg in sorted_segs:
-                if combined_duration >= MAX_REFERENCE_DURATION:
+                if combined_duration >= MAX_REF_DURATION_SEC:
                     break
 
                 start_ms = int(seg.get("start", 0) * 1000)
                 end_ms = int(seg.get("end", 0) * 1000)
                 seg_duration = (end_ms - start_ms) / 1000.0
 
-                # Пропускаем очень короткие сегменты (< 1 сек) - много шума
                 if seg_duration < 1.0:
                     continue
 
                 try:
                     seg_audio = audio[start_ms:end_ms]
-
-                    # Добавляем короткую паузу между сегментами
                     if len(combined_audio) > 0:
-                        combined_audio += AudioSegment.silent(duration=200)  # 200ms пауза
-
+                        combined_audio += AudioSegment.silent(duration=200)
                     combined_audio += seg_audio
                     combined_duration += seg_duration
                     segments_used += 1
+
+                    seg_text = seg.get("text", "").strip()
+                    if seg_text:
+                        combined_texts.append(seg_text)
                 except Exception:
                     continue
 
             if combined_duration < 2.0:
-                self._log(f"⚠️ Недостаточно аудио для {speaker} (только {combined_duration:.1f}с)")
+                self._log(f"   Warning: not enough audio for {speaker} ({combined_duration:.1f}s)")
                 continue
 
-            # Обрезаем если слишком длинный
-            if combined_duration > MAX_REFERENCE_DURATION:
-                combined_audio = combined_audio[:int(MAX_REFERENCE_DURATION * 1000)]
-                combined_duration = MAX_REFERENCE_DURATION
+            if combined_duration > MAX_REF_DURATION_SEC:
+                combined_audio = combined_audio[:int(MAX_REF_DURATION_SEC * 1000)]
+                combined_duration = MAX_REF_DURATION_SEC
 
             try:
-                # Улучшаем качество референса
                 combined_audio = self._enhance_reference_audio(combined_audio)
 
                 sample_path = self.voices_dir / f"{speaker}_sample.wav"
-                # Экспортируем в формате оптимальном для XTTS: 22050 Hz, mono
-                combined_audio.export(
-                    str(sample_path),
-                    format="wav",
-                    parameters=["-ar", "22050", "-ac", "1"]
-                )
+                combined_audio.export(str(sample_path), format="wav",
+                                     parameters=["-ar", "24000", "-ac", "1"])
 
                 speaker_samples[speaker] = str(sample_path)
-                self._log(
-                    f"✅ Референс для {speaker}: {combined_duration:.1f}с "
-                    f"(объединено {segments_used} сегментов)"
-                )
+
+                if combined_texts:
+                    self._speaker_ref_texts[speaker] = " ".join(combined_texts)
+
+                self._log(f"   {speaker}: {combined_duration:.1f}s reference ({segments_used} segments combined)")
             except Exception as e:
-                self._log(f"❌ Ошибка сохранения референса для {speaker}: {e}")
+                self._log(f"   Error saving reference for {speaker}: {e}")
                 continue
 
-        self._log(f"🎯 Извлечено референсов: {len(speaker_samples)}/{len(speaker_segments)}")
+        self._log(f"Extracted {len(speaker_samples)}/{len(speaker_segments)} speaker references")
         return speaker_samples
 
     def _enhance_reference_audio(self, audio: AudioSegment) -> AudioSegment:
-        """
-        Улучшает качество референсного аудио для лучшего клонирования.
-
-        - Конвертация в моно
-        - Нормализация громкости
-        - Удаление тишины в начале/конце
-        - Компрессия динамического диапазона (опционально)
-        """
+        """Улучшает качество референсного аудио."""
         try:
             from pydub.effects import normalize, strip_silence, compress_dynamic_range
 
-            # Конвертируем в моно если стерео
             if audio.channels > 1:
                 audio = audio.set_channels(1)
 
-            # Нормализуем громкость
             audio = normalize(audio)
-
-            # Удаляем тишину в начале и конце
-            # silence_thresh=-40 dB, оставляем минимум 50ms тишины
             audio = strip_silence(audio, silence_len=50, silence_thresh=-40, padding=50)
 
-            # Лёгкая компрессия для выравнивания громкости речи
-            # (помогает когда спикер говорит то тихо, то громко)
             try:
-                audio = compress_dynamic_range(audio, threshold=-20.0, ratio=2.0, attack=5.0, release=50.0)
+                audio = compress_dynamic_range(audio, threshold=-20.0, ratio=2.0,
+                                               attack=5.0, release=50.0)
             except Exception:
-                pass  # Некоторые версии pydub не поддерживают
+                pass
 
             return audio
         except ImportError:
-            # pydub.effects может быть недоступен
             return audio
-        except Exception as e:
-            self._log(f"⚠️ Не удалось улучшить референс: {e}")
+        except Exception:
             return audio
-    
+
     def extract_speaker_samples_for_gender(
         self,
         audio_path: str,
         segments: List[Dict]
     ) -> Dict[str, str]:
-        """
-        Быстрая извлечка минимальных аудио-сэмплов только для определения пола.
-        Без тяжёлой обработки (enhance, компрессия) — нужна только pitch-детекция.
-        """
-        self._log("🔍 Быстрая извлечка аудио для определения пола спикеров...")
+        """Быстрая извлечка минимальных аудио-сэмплов только для определения пола."""
+        self._log("Quick extraction for gender detection...")
 
         if not segments:
             return {}
@@ -566,10 +606,9 @@ class VoiceCloner:
         try:
             audio = AudioSegment.from_file(audio_path)
         except Exception as e:
-            self._log(f"❌ Ошибка загрузки аудио: {e}")
+            self._log(f"Error loading audio: {e}")
             return {}
 
-        # Группируем сегменты по спикерам
         speaker_segments = {}
         for seg in segments:
             speaker = seg.get("speaker", "SPEAKER_UNKNOWN")
@@ -580,7 +619,6 @@ class VoiceCloner:
         speaker_samples = {}
 
         for speaker, segs in speaker_segments.items():
-            # Берём самый длинный сегмент (минимум 2 сек для pitch-анализа)
             sorted_segs = sorted(
                 segs,
                 key=lambda s: float(s.get("end", 0)) - float(s.get("start", 0)),
@@ -597,92 +635,79 @@ class VoiceCloner:
 
                 try:
                     sample_audio = audio[start_ms:end_ms]
-                    # Минимальная обработка: только моно + ресэмпл
                     sample_audio = sample_audio.set_channels(1)
 
                     sample_path = self.voices_dir / f"{speaker}_gender_sample.wav"
-                    sample_audio.export(str(sample_path), format="wav", parameters=["-ar", "16000", "-ac", "1"])
+                    sample_audio.export(str(sample_path), format="wav",
+                                       parameters=["-ar", "16000", "-ac", "1"])
                     speaker_samples[speaker] = str(sample_path)
-                    self._log(f"   {speaker}: {duration:.1f}с сэмпл для анализа")
+                    self._log(f"   {speaker}: {duration:.1f}s sample for analysis")
                     break
                 except Exception:
                     continue
 
             if speaker not in speaker_samples:
-                self._log(f"⚠️ {speaker}: недостаточно аудио для определения пола")
+                self._log(f"   Warning: {speaker}: not enough audio for gender detection")
 
         return speaker_samples
 
     # ── Preset Voices (готовые голоса) ──────────────────────────────────────
 
-    # Текст для генерации референсных сэмплов через edge-tts (≈10 секунд речи)
     _PRESET_TEXT_MALE = (
-        "Добрый день, уважаемые зрители. Сегодня мы рассмотрим очень интересную тему, "
-        "которая касается каждого из нас. Давайте разберёмся в деталях и постараемся "
-        "понять основные принципы."
+        "Hello everyone, today we will look at a very interesting topic "
+        "that concerns each of us. Let's understand the details and try "
+        "to grasp the basic principles of this matter."
     )
     _PRESET_TEXT_FEMALE = (
-        "Здравствуйте, дорогие друзья. Я рада приветствовать вас на нашем канале. "
-        "Сегодня у нас важная и увлекательная тема. Надеюсь, вам будет интересно "
-        "и полезно узнать обо всём подробнее."
+        "Hello dear friends, I am glad to welcome you to our channel. "
+        "Today we have an important and fascinating topic. I hope you "
+        "will find it interesting and useful to learn more about it."
     )
 
     def _get_presets_dir(self) -> Path:
-        """Возвращает директорию для хранения пресетных голосов."""
         presets_dir = self.voices_dir / "presets"
         presets_dir.mkdir(parents=True, exist_ok=True)
         return presets_dir
 
     def _ensure_preset_voices(self) -> Dict[str, str]:
-        """
-        Проверяет наличие пресетных голосов и генерирует их через edge-tts если нет.
-
-        Returns:
-            Словарь {"male": path, "female": path}
-        """
+        """Проверяет наличие пресетных голосов и генерирует через edge-tts если нет."""
         presets_dir = self._get_presets_dir()
-        male_path = presets_dir / "male_ru.wav"
-        female_path = presets_dir / "female_ru.wav"
+        male_path = presets_dir / "male_preset.wav"
+        female_path = presets_dir / "female_preset.wav"
 
-        # Если оба файла уже есть — возвращаем
         if male_path.exists() and female_path.exists():
-            self._log("✅ Пресетные голоса найдены в кэше")
+            self._log("Preset voices found in cache")
             return {"male": str(male_path), "female": str(female_path)}
 
-        self._log("📥 Генерация пресетных голосов через Microsoft Edge TTS...")
+        self._log("Generating preset voices via Microsoft Edge TTS...")
 
         try:
             import edge_tts
         except ImportError:
-            self._log("📦 Установка edge-tts...")
+            self._log("Installing edge-tts...")
+            import subprocess
             subprocess.check_call([sys.executable, "-m", "pip", "install", "edge-tts"])
             import edge_tts
 
         import asyncio
 
         async def _generate_preset(voice: str, text: str, output_path: Path):
-            """Генерация одного пресетного голоса."""
             mp3_path = output_path.with_suffix(".mp3")
             communicate = edge_tts.Communicate(text, voice)
             await communicate.save(str(mp3_path))
-            # Конвертируем MP3 → WAV (22050 Hz, mono) для XTTS
             audio = AudioSegment.from_mp3(str(mp3_path))
-            audio = audio.set_channels(1).set_frame_rate(22050)
+            audio = audio.set_channels(1).set_frame_rate(24000)
             audio.export(str(output_path), format="wav")
             mp3_path.unlink(missing_ok=True)
 
         async def _generate_all():
             if not male_path.exists():
-                self._log("🎤 Генерация мужского голоса (ru-RU-DmitryNeural)...")
-                await _generate_preset("ru-RU-DmitryNeural", self._PRESET_TEXT_MALE, male_path)
-                self._log(f"✅ Мужской голос сохранён: {male_path}")
-
+                self._log("Generating male voice (en-US-GuyNeural)...")
+                await _generate_preset("en-US-GuyNeural", self._PRESET_TEXT_MALE, male_path)
             if not female_path.exists():
-                self._log("🎤 Генерация женского голоса (ru-RU-SvetlanaNeural)...")
-                await _generate_preset("ru-RU-SvetlanaNeural", self._PRESET_TEXT_FEMALE, female_path)
-                self._log(f"✅ Женский голос сохранён: {female_path}")
+                self._log("Generating female voice (en-US-JennyNeural)...")
+                await _generate_preset("en-US-JennyNeural", self._PRESET_TEXT_FEMALE, female_path)
 
-        # Запускаем async генерацию
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
@@ -698,21 +723,13 @@ class VoiceCloner:
 
     def _detect_gender(self, audio_path: str) -> str:
         """
-        Определяет пол спикера по высоте голоса (fundamental frequency).
-        Использует автокорреляцию с коррекцией октавных ошибок.
-
-        Мужской голос: F0 ≈ 85-155 Гц
-        Женский голос: F0 ≈ 165-255 Гц
-        Порог: 160 Гц
-
-        Returns:
-            "male" или "female"
+        Определяет пол спикера по высоте голоса (F0).
+        Мужской: F0 ~ 85-155 Гц, Женский: F0 ~ 165-255 Гц, Порог: 160 Гц
         """
         try:
             audio = AudioSegment.from_file(audio_path)
             audio = audio.set_channels(1).set_frame_rate(16000).set_sample_width(2)
 
-            # Извлекаем PCM данные как numpy массив
             samples = np.array(struct.unpack(
                 f"<{len(audio.raw_data) // 2}h", audio.raw_data
             ), dtype=np.float64)
@@ -720,40 +737,30 @@ class VoiceCloner:
             if len(samples) < 1600:
                 return "male"
 
-            # Нормализуем
             samples = samples / (np.max(np.abs(samples)) + 1e-10)
 
             sample_rate = 16000
-            # Диапазон: 60-300 Гц (покрывает и мужские и женские голоса)
-            min_lag = sample_rate // 300  # 53 сэмплов (300 Гц)
-            max_lag = sample_rate // 60   # 266 сэмплов (60 Гц)
-
-            # Фреймы по 50мс (800 сэмплов) — длиннее для надёжности на низких частотах
+            min_lag = sample_rate // 300
+            max_lag = sample_rate // 60
             frame_size = int(sample_rate * 0.05)
             hop_size = int(sample_rate * 0.02)
 
             f0_values = []
             for start in range(0, len(samples) - frame_size, hop_size):
                 frame = samples[start:start + frame_size]
-
-                # Проверяем что фрейм содержит речь (не тишина)
                 energy = np.mean(frame ** 2)
                 if energy < 0.001:
                     continue
 
-                # Автокорреляция
                 corr = np.correlate(frame, frame, mode='full')
-                corr = corr[len(corr) // 2:]  # Правая половина
+                corr = corr[len(corr) // 2:]
 
                 if max_lag >= len(corr):
                     continue
-
-                # Нормализуем автокорреляцию относительно лага 0
                 if corr[0] <= 0:
                     continue
                 corr_norm = corr / corr[0]
 
-                # Ищем пик в нужном диапазоне лагов
                 search_region = corr_norm[min_lag:max_lag + 1]
                 if len(search_region) == 0:
                     continue
@@ -761,24 +768,16 @@ class VoiceCloner:
                 peak_idx = np.argmax(search_region) + min_lag
                 peak_val = corr_norm[peak_idx]
 
-                # Порог значимости пика
                 if peak_val < 0.25:
                     continue
 
-                # ── Коррекция октавных ошибок ──
-                # Если нашли пик при лаге L (частота F), проверяем лаг 2*L (частота F/2).
-                # Если при 2*L тоже есть значимый пик — истинный F0 вдвое ниже.
-                # Это главная причина ложного определения мужского голоса как женского.
                 double_lag = peak_idx * 2
                 if double_lag < len(corr_norm):
-                    # Ищем пик в окрестности ±3 сэмпла от 2*lag
                     search_lo = max(min_lag, double_lag - 3)
                     search_hi = min(max_lag, double_lag + 3)
                     if search_lo < search_hi and search_hi < len(corr_norm):
                         sub_region = corr_norm[search_lo:search_hi + 1]
                         sub_peak_val = np.max(sub_region)
-                        # Если пик на двойном лаге достаточно сильный (>70% от найденного)
-                        # → это настоящий F0, а первый пик — гармоника
                         if sub_peak_val > peak_val * 0.7:
                             sub_peak_idx = np.argmax(sub_region) + search_lo
                             peak_idx = sub_peak_idx
@@ -788,96 +787,57 @@ class VoiceCloner:
                     f0_values.append(f0)
 
             if not f0_values:
-                self._log("⚠️ Не удалось определить F0, используем мужской голос по умолчанию")
                 return "male"
 
-            # Медианная F0 (устойчива к выбросам)
             median_f0 = float(np.median(f0_values))
             gender = "female" if median_f0 > 160 else "male"
-            self._log(f"   🔊 F0 = {median_f0:.0f} Гц → {'женский' if gender == 'female' else 'мужской'} голос")
+            self._log(f"   F0 = {median_f0:.0f} Hz -> {'female' if gender == 'female' else 'male'}")
             return gender
 
         except Exception as e:
-            self._log(f"⚠️ Ошибка определения пола: {e}, используем мужской по умолчанию")
+            self._log(f"   Warning: gender detection error: {e}, defaulting to male")
             return "male"
 
     def _create_pitch_variant(self, wav_path: str, semitones: float) -> str:
-        """
-        Создаёт вариант голоса со сдвигом высоты тона.
-        Аккуратный pitch shift через изменение sample rate + resample.
-
-        Args:
-            wav_path: Путь к исходному WAV
-            semitones: Сдвиг в полутонах (например, +1.5 или -1.5)
-
-        Returns:
-            Путь к модифицированному WAV файлу
-        """
+        """Создаёт вариант голоса со сдвигом высоты тона."""
         try:
             audio = AudioSegment.from_file(wav_path)
-
-            # Pitch shift через изменение частоты дискретизации
-            # Повышение тона: увеличиваем sample rate, потом ресэмплируем обратно
-            # Формула: new_rate = original_rate * 2^(semitones/12)
             original_rate = audio.frame_rate
             shift_factor = 2 ** (semitones / 12.0)
             new_rate = int(original_rate * shift_factor)
 
-            # Меняем frame rate (это сдвигает pitch + меняет скорость)
-            shifted = audio._spawn(audio.raw_data, overrides={
-                "frame_rate": new_rate
-            })
-
-            # Возвращаем к исходной частоте (это нормализует скорость, сохраняя pitch)
+            shifted = audio._spawn(audio.raw_data, overrides={"frame_rate": new_rate})
             shifted = shifted.set_frame_rate(original_rate)
 
-            # Сохраняем вариант
             variant_name = Path(wav_path).stem + f"_variant_{semitones:+.1f}st.wav"
             variant_path = self._get_presets_dir() / variant_name
-            shifted.export(str(variant_path), format="wav", parameters=["-ar", "22050", "-ac", "1"])
-
+            shifted.export(str(variant_path), format="wav",
+                          parameters=["-ar", "24000", "-ac", "1"])
             return str(variant_path)
 
         except Exception as e:
-            self._log(f"⚠️ Ошибка создания варианта голоса: {e}")
-            return wav_path  # Возвращаем оригинал если не удалось
+            self._log(f"   Warning: pitch variant error: {e}")
+            return wav_path
 
     def _build_preset_speaker_map(
         self,
         speaker_samples: Dict[str, str],
         preset_voices: Dict[str, str]
     ) -> Dict[str, str]:
-        """
-        Строит маппинг спикеров на пресетные голоса с учётом пола.
-        Если несколько спикеров одного пола — создаёт pitch-варианты.
+        """Строит маппинг спикеров на пресетные голоса с учётом пола."""
+        self._log("Detecting speaker genders...")
 
-        Args:
-            speaker_samples: Оригинальные референсы {speaker_id: wav_path}
-            preset_voices: Пресеты {"male": path, "female": path}
-
-        Returns:
-            Новый маппинг {speaker_id: preset_wav_path}
-        """
-        self._log("🔍 Определение пола спикеров...")
-
-        # Определяем пол каждого спикера
         speaker_genders = {}
         for speaker, sample_path in speaker_samples.items():
             gender = self._detect_gender(sample_path)
             speaker_genders[speaker] = gender
-            self._log(f"   {speaker}: {'👨 мужской' if gender == 'male' else '👩 женский'}")
 
-        # Группируем по полу
         male_speakers = [s for s, g in speaker_genders.items() if g == "male"]
         female_speakers = [s for s, g in speaker_genders.items() if g == "female"]
 
         preset_map = {}
-
-        # Варианты pitch shift для спикеров одного пола (аккуратные сдвиги)
-        # Максимум ±2 полутона, чтобы звучало естественно
         pitch_variants = [0, +1.5, -1.5, +2.0, -2.0]
 
-        # Назначаем мужские голоса
         for i, speaker in enumerate(male_speakers):
             if i == 0:
                 preset_map[speaker] = preset_voices["male"]
@@ -885,9 +845,7 @@ class VoiceCloner:
                 semitones = pitch_variants[min(i, len(pitch_variants) - 1)]
                 variant = self._create_pitch_variant(preset_voices["male"], semitones)
                 preset_map[speaker] = variant
-                self._log(f"   {speaker}: мужской вариант ({semitones:+.1f} полутонов)")
 
-        # Назначаем женские голоса
         for i, speaker in enumerate(female_speakers):
             if i == 0:
                 preset_map[speaker] = preset_voices["female"]
@@ -895,15 +853,14 @@ class VoiceCloner:
                 semitones = pitch_variants[min(i, len(pitch_variants) - 1)]
                 variant = self._create_pitch_variant(preset_voices["female"], semitones)
                 preset_map[speaker] = variant
-                self._log(f"   {speaker}: женский вариант ({semitones:+.1f} полутонов)")
 
-        # Если есть спикеры без сэмплов — назначаем мужской по умолчанию
         if not preset_map:
-            self._log("⚠️ Не удалось определить пол спикеров, используем мужской голос")
             preset_map["SPEAKER_UNKNOWN"] = preset_voices["male"]
 
-        self._log(f"✅ Готовые голоса назначены: {len(male_speakers)} муж., {len(female_speakers)} жен.")
+        self._log(f"Preset voices assigned: {len(male_speakers)} male, {len(female_speakers)} female")
         return preset_map
+
+    # ── Main Dubbing Generation ────────────────────────────────────────────
 
     def generate_dubbing(
         self,
@@ -915,217 +872,243 @@ class VoiceCloner:
         """
         Генерирует дубляж для всех сегментов с клонированием голоса.
 
-        Args:
-            segments: Список сегментов с переведенным текстом
-            speaker_samples: Словарь {speaker_id: path_to_sample.wav}
-            target_lang: Целевой язык для генерации (по умолчанию "ru")
-            use_preset_voices: Использовать готовые профессиональные голоса вместо клонирования
-
-        Returns:
-            Обновленный список сегментов с добавленным ключом "audio_file"
+        Интеллектуальная система:
+          1. Вычисляет бюджет времени (elastic timing)
+          2. Генерирует TTS с проверкой длительности
+          3. При превышении: сокращает текст + перегенерирует
+          4. Сохраняет actual_audio_duration для VideoMaker
         """
         if not segments:
-            self._log("⚠️ Нет сегментов для генерации дубляжа")
+            self._log("No segments for dubbing")
             return segments
-        
-        # Нормализуем язык: преобразуем RUSSIAN -> ru и т.д.
+
+        # Нормализуем язык
         lang_map = {
-            'RUSSIAN': 'ru',
-            'ENGLISH': 'en',
-            'SPANISH': 'es',
-            'FRENCH': 'fr',
-            'GERMAN': 'de',
-            'ITALIAN': 'it',
-            'PORTUGUESE': 'pt',
-            'POLISH': 'pl',
-            'TURKISH': 'tr',
-            'DUTCH': 'nl',
-            'CZECH': 'cs',
-            'ARABIC': 'ar',
-            'CHINESE': 'zh-cn',
-            'HUNGARIAN': 'hu',
-            'KOREAN': 'ko',
-            'JAPANESE': 'ja',
+            'RUSSIAN': 'ru', 'ENGLISH': 'en', 'SPANISH': 'es', 'FRENCH': 'fr',
+            'GERMAN': 'de', 'ITALIAN': 'it', 'PORTUGUESE': 'pt', 'POLISH': 'pl',
+            'TURKISH': 'tr', 'DUTCH': 'nl', 'CZECH': 'cs', 'ARABIC': 'ar',
+            'CHINESE': 'zh', 'HUNGARIAN': 'hu', 'KOREAN': 'ko', 'JAPANESE': 'ja',
             'HINDI': 'hi'
         }
         target_lang = lang_map.get(target_lang.upper(), target_lang.lower())
-        
-        # Загружаем модель (ленивая загрузка)
-        self._load_model()
-        
-        # Если включены готовые голоса — подменяем speaker_samples на пресетные
+
+        # Загружаем модель
+        self._load_model(target_lang)
+
+        # Если preset — подменяем speaker_samples
         if use_preset_voices:
-            self._log("🎭 Режим готовых голосов: используем профессиональные пресеты")
+            self._log("Preset mode: using professional preset voices")
             try:
                 preset_voices = self._ensure_preset_voices()
                 speaker_samples = self._build_preset_speaker_map(speaker_samples, preset_voices)
             except Exception as e:
-                self._log(f"❌ Ошибка подготовки пресетных голосов: {e}")
-                self._log("⚠️ Переключаемся на клонирование оригинальных голосов")
+                self._log(f"Error preparing preset voices: {e}")
+                self._log("Falling back to voice cloning")
 
         if not speaker_samples:
-            self._log("⚠️ Нет референсных аудио для спикеров")
+            self._log("No speaker references available")
             return segments
-        
+
         total_segments = len(segments)
-        self._log(f"🎬 Генерация дубляжа для {total_segments} сегментов...")
-        
-        # Fallback: если для спикера нет референса, используем первый доступный
+        self._log(f"Generating dubbing for {total_segments} segments (F5-TTS, {target_lang})...")
+
+        # ── Elastic Timing: вычисляем бюджеты времени ──────────────────────
+        from core.elastic_timing import compute_effective_durations
+        compute_effective_durations(segments)
+        extensions = [s.get('gap_extension', 0) for s in segments if s.get('gap_extension', 0) > 0]
+        if extensions:
+            self._log(
+                f"   Elastic timing: {len(extensions)} segments extended, "
+                f"avg +{sum(extensions)/len(extensions):.2f}s, max +{max(extensions):.2f}s"
+            )
+
         fallback_sample = list(speaker_samples.values())[0] if speaker_samples else None
-        
+
+        # Ref texts per speaker
+        _generic_ref_texts = {
+            "en": "This is a sample of my voice for cloning purposes.",
+            "ru": "Это образец моего голоса для клонирования.",
+        }
+        _default_ref_text = _generic_ref_texts.get(target_lang, _generic_ref_texts["en"])
+
         updated_segments = []
         success_count = 0
         error_count = 0
+        retry_count = 0
         start_time = time.time()
-        
+
         for i, seg in enumerate(segments):
-            # Проверяем флаг остановки в цикле
+            # Проверяем флаг остановки
             if self.should_stop_callback and self.should_stop_callback():
-                self._log("⏹️ Генерация дубляжа прервана пользователем")
+                self._log("Dubbing generation stopped by user")
                 raise InterruptedError("Processing stopped by user")
 
             speaker = seg.get("speaker", "SPEAKER_UNKNOWN")
             text = seg.get("text", "").strip()
-            tts_speed = float(seg.get("tts_speed", 1.0))  # Скорость из умного перевода
-            
+            original_duration = float(seg.get("end", 0)) - float(seg.get("start", 0))
+            effective_duration = float(seg.get("effective_duration", original_duration))
+            gap_ext = float(seg.get("gap_extension", 0.0))
+
             if not text:
-                self._log(f"⚠️ [{i+1}/{total_segments}] Сегмент {i}: пустой текст, пропускаем")
                 updated_segments.append(seg)
                 continue
-            
-            # Определяем референсный файл для спикера
+
             speaker_wav = speaker_samples.get(speaker, fallback_sample)
-            
+
             if not speaker_wav or not os.path.exists(speaker_wav):
-                self._log(f"⚠️ [{i+1}/{total_segments}] Сегмент {i}: нет референса для {speaker}, пропускаем")
+                self._log(f"[{i+1}/{total_segments}] No reference for {speaker}, skipping")
                 updated_segments.append(seg)
                 error_count += 1
                 continue
-            
-            # Генерируем аудио
+
             output_path = self.temp_tts_dir / f"segment_{i:04d}.wav"
-            
+
             try:
-                # Вычисляем прогресс
                 progress = ((i + 1) / total_segments) * 100
                 elapsed = time.time() - start_time
-                avg_time_per_segment = elapsed / (i + 1) if i > 0 else 0
-                remaining_segments = total_segments - (i + 1)
-                estimated_remaining = avg_time_per_segment * remaining_segments
-                
-                self._log(f"🎤 [{i+1}/{total_segments}] ({progress:.1f}%) {speaker} | {len(text)} символов | ⏱️ ~{estimated_remaining/60:.1f} мин осталось")
-                
-                # Генерация TTS
-                if self.use_venv_tts:
-                    # Используем venv_tts через subprocess
-                    success = self._generate_tts_via_venv(
-                        text=text,
-                        speaker_wav=speaker_wav,
-                        output_path=str(output_path),
-                        language=target_lang,
-                        segment_index=i,
-                        total_segments=total_segments,
-                        tts_speed=tts_speed
-                    )
-                    if not success:
-                        raise Exception("Ошибка генерации через venv_tts")
+                avg_time = elapsed / (i + 1) if i > 0 else 0
+                remaining = avg_time * (total_segments - (i + 1))
+
+                ext_info = f" +{gap_ext:.1f}s" if gap_ext > 0 else ""
+                self._log(
+                    f"[{i+1}/{total_segments}] ({progress:.0f}%) {speaker} | "
+                    f"{len(text)} chars | budget: {effective_duration:.1f}s{ext_info} | "
+                    f"~{remaining/60:.1f} min left"
+                )
+
+                seg_start = time.time()
+
+                # ref_text для спикера
+                ref_text = self._speaker_ref_texts.get(speaker, _default_ref_text)
+
+                # ── Timing-aware generation with retry ──────────────────
+                wav, actual_duration, final_text = self._generate_with_timing(
+                    text=text,
+                    ref_file=speaker_wav,
+                    ref_text=ref_text,
+                    lang=target_lang,
+                    time_budget_sec=effective_duration,
+                    segment_index=i,
+                )
+
+                if wav is None:
+                    raise RuntimeError("No audio generated")
+
+                # Отслеживаем ретраи (если текст изменился)
+                if final_text != text:
+                    retry_count += 1
+
+                sf.write(str(output_path), wav, F5_SAMPLE_RATE)
+
+                # Постобработка
+                self._postprocess_audio(str(output_path))
+
+                seg_time = time.time() - seg_start
+
+                # Определяем статус тайминга
+                pressure = actual_duration / effective_duration if effective_duration > 0 else 0
+                if pressure <= 1.0:
+                    timing_status = "perfect"
+                elif pressure <= TIMING_TOLERANCE_RATIO:
+                    timing_status = "OK (gentle atempo)"
+                elif pressure <= MAX_ATEMPO_TOLERANCE:
+                    timing_status = "tight (atempo)"
                 else:
-                    # Используем прямой вызов TTS API
-                    seg_start = time.time()
-                    self.model.tts_to_file(
-                        text=text,
-                        speaker_wav=speaker_wav,
-                        language=target_lang,
-                        file_path=str(output_path),
-                        split_sentences=False  # Важно! Мы сами разбиваем на предложения
-                    )
-                    seg_time = time.time() - seg_start
-                    self._log(f"   ⏱️ Время генерации: {seg_time:.1f}с")
-                
-                # Обновляем сегмент
+                    timing_status = "OVER (will trim)"
+
+                self._log(
+                    f"   {actual_duration:.1f}s / {effective_duration:.1f}s "
+                    f"({pressure:.0%}) [{timing_status}] in {seg_time:.1f}s"
+                )
+
                 seg_copy = seg.copy()
                 seg_copy["audio_file"] = str(output_path)
+                seg_copy["actual_audio_duration"] = actual_duration
+                if final_text != text:
+                    seg_copy["text_shortened"] = True
+                    seg_copy["text"] = final_text
                 updated_segments.append(seg_copy)
-                
                 success_count += 1
-                
+
             except InterruptedError:
-                self._log("⏹️ Генерация дубляжа прервана пользователем")
                 raise
             except Exception as e:
-                self._log(f"❌ [{i+1}/{total_segments}] Ошибка генерации для сегмента {i} ({speaker}): {e}")
-                # Добавляем сегмент без аудио, чтобы не потерять данные
+                self._log(f"[{i+1}/{total_segments}] Error for segment {i} ({speaker}): {e}")
                 updated_segments.append(seg)
                 error_count += 1
                 continue
-        
+
+        # Очищаем CUDA memory
+        if self.device == "cuda":
+            import torch
+            torch.cuda.empty_cache()
+
         total_time = time.time() - start_time
+
+        # Итоговая статистика
         self._log(
-            f"✅ Генерация завершена: успешно {success_count}/{total_segments}, "
-            f"ошибок {error_count} | Общее время: {total_time/60:.1f} мин ({total_time:.1f}с)"
+            f"Dubbing complete: {success_count}/{total_segments} OK, "
+            f"{error_count} errors, {retry_count} retried | "
+            f"Total: {total_time/60:.1f} min"
         )
-        
+
+        # Статистика тайминга
+        from core.elastic_timing import estimate_timing_pressure
+        pressure_stats = estimate_timing_pressure(updated_segments)
+        if pressure_stats['avg_pressure'] > 0:
+            self._log(
+                f"   Timing pressure: avg {pressure_stats['avg_pressure']:.0%}, "
+                f"max {pressure_stats['max_pressure']:.0%}, "
+                f"{pressure_stats['over_budget_count']} over-budget "
+                f"(total deficit: {pressure_stats['over_budget_total_sec']:.1f}s)"
+            )
+
         return updated_segments
-    
+
+    # ── Audio Assembly ─────────────────────────────────────────────────────
+
     def merge_audio_segments(
         self,
         segments: List[Dict],
         output_path: str
     ) -> str:
-        """
-        Объединяет все аудио сегменты в один финальный файл.
-        
-        Args:
-            segments: Список сегментов с ключом "audio_file"
-            output_path: Путь для сохранения финального аудио
-            original_audio_path: Опционально - путь к исходному аудио (для синхронизации)
-            
-        Returns:
-            Путь к созданному файлу
-        """
-        self._log(f"🎬 Объединение {len(segments)} аудио сегментов...")
-        
+        """Объединяет все аудио сегменты в один файл."""
+        self._log(f"Merging {len(segments)} audio segments...")
+
         if not segments:
-            raise ValueError("Нет сегментов для объединения")
-        
-        # Собираем все аудио файлы в правильном порядке
+            raise ValueError("No segments to merge")
+
         audio_segments = []
         missing_files = []
-        
+
         for i, seg in enumerate(segments):
             audio_file = seg.get("audio_file")
             if not audio_file or not os.path.exists(audio_file):
                 missing_files.append(i)
-                # Создаем тишину для пропущенных сегментов
                 start = float(seg.get("start", 0))
                 end = float(seg.get("end", start + 1.0))
                 duration_ms = int((end - start) * 1000)
                 silence = AudioSegment.silent(duration=duration_ms)
                 audio_segments.append(silence)
-                self._log(f"⚠️ Сегмент {i}: файл отсутствует, добавлена тишина ({duration_ms}ms)")
             else:
                 try:
                     audio = AudioSegment.from_file(audio_file)
                     audio_segments.append(audio)
                 except Exception as e:
-                    self._log(f"⚠️ Ошибка загрузки сегмента {i}: {e}")
-                    # Добавляем тишину вместо ошибки
+                    self._log(f"   Warning: error loading segment {i}: {e}")
                     start = float(seg.get("start", 0))
                     end = float(seg.get("end", start + 1.0))
                     duration_ms = int((end - start) * 1000)
                     silence = AudioSegment.silent(duration=duration_ms)
                     audio_segments.append(silence)
-        
+
         if missing_files:
-            self._log(f"⚠️ Пропущено файлов: {len(missing_files)}")
-        
-        # Объединяем все сегменты с плавными переходами (crossfade)
+            self._log(f"   {len(missing_files)} missing files replaced with silence")
+
         if not audio_segments:
-            raise ValueError("Нет аудио для объединения")
+            raise ValueError("No audio to merge")
 
-        CROSSFADE_MS = 30  # Мягкий переход между сегментами
-
-        self._log(f"🔗 Склейка {len(audio_segments)} сегментов с crossfade {CROSSFADE_MS}ms...")
+        CROSSFADE_MS = 30
 
         final_audio = audio_segments[0]
         if len(final_audio) > CROSSFADE_MS * 3:
@@ -1140,25 +1123,23 @@ class VoiceCloner:
 
         if len(final_audio) > CROSSFADE_MS * 3:
             final_audio = final_audio.fade_out(CROSSFADE_MS)
-        
-        # Экспортируем финальный файл
+
         output_path_obj = Path(output_path)
         output_path_obj.parent.mkdir(parents=True, exist_ok=True)
-        
+
         final_audio.export(str(output_path), format="wav")
-        
+
         duration_sec = len(final_audio) / 1000.0
-        self._log(f"✅ Финальное аудио создано: {output_path}")
-        self._log(f"   Длительность: {duration_sec:.1f} секунд")
-        
+        self._log(f"Final audio created: {output_path} ({duration_sec:.1f}s)")
+
         return str(output_path)
-    
+
     def cleanup_temp_files(self):
         """Очищает временные файлы TTS"""
         try:
             if self.temp_tts_dir.exists():
                 for file in self.temp_tts_dir.glob("*.wav"):
                     file.unlink()
-                self._log(f"🧹 Временные файлы TTS очищены")
+                self._log("Temp TTS files cleaned up")
         except Exception as e:
-            self._log(f"⚠️ Ошибка очистки временных файлов: {e}")
+            self._log(f"Warning: cleanup error: {e}")

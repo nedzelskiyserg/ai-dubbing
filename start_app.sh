@@ -41,9 +41,13 @@ if ! command -v ffmpeg &> /dev/null; then
 fi
 echo -e "  ${GREEN}✓${NC} FFmpeg установлен"
 
-# Python 3.10+
+# Python 3.10+ (F5-TTS requires 3.10+)
 if [ -d "venv_tts" ]; then
     PYTHON_CMD="$SCRIPT_DIR/venv_tts/bin/python"
+elif [ -d ".venv_f5tts" ]; then
+    PYTHON_CMD="$SCRIPT_DIR/.venv_f5tts/bin/python"
+elif [ -d ".venv" ]; then
+    PYTHON_CMD="$SCRIPT_DIR/.venv/bin/python"
 else
     PYTHON_CMD="python3"
 fi
@@ -101,19 +105,29 @@ fi
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}[3/6] Проверка Python окружения...${NC}"
 
+# Определяем путь к venv
+VENV_DIR=""
 if [ -d "venv_tts" ]; then
-    source venv_tts/bin/activate
-    echo -e "  ${GREEN}✓${NC} venv_tts активирован"
+    VENV_DIR="venv_tts"
+elif [ -d ".venv_f5tts" ]; then
+    VENV_DIR=".venv_f5tts"
+elif [ -d ".venv" ]; then
+    VENV_DIR=".venv"
+fi
+
+if [ -n "$VENV_DIR" ]; then
+    source "$VENV_DIR/bin/activate"
+    echo -e "  ${GREEN}✓${NC} $VENV_DIR активирован"
 
     # Проверяем критические зависимости
-    if ! python -c "import flask, TTS, whisperx, noisereduce" 2>/dev/null; then
+    if ! python -c "import flask, f5_tts, whisperx, noisereduce" 2>/dev/null; then
         echo -e "  ${YELLOW}⏳ Установка зависимостей...${NC}"
         pip install -r requirements.txt -q
         pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu -q
     fi
     echo -e "  ${GREEN}✓${NC} Python зависимости установлены"
 else
-    echo -e "  ${RED}❌ venv_tts не найден${NC}"
+    echo -e "  ${RED}❌ Python venv не найден${NC}"
     echo -e "  ${YELLOW}   Создайте: python3.11 -m venv venv_tts${NC}"
     echo -e "  ${YELLOW}   Затем: source venv_tts/bin/activate && pip install -r requirements.txt${NC}"
     exit 1

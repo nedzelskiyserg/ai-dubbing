@@ -55,6 +55,63 @@ except ImportError:
     pass
 # -----------------------------------------
 
+# --- ПАТЧ ДЛЯ torchaudio 2.10+ (AudioMetaData removed) ---
+# pyannote-audio 3.x использует torchaudio.AudioMetaData и torchaudio.info(),
+# которые удалены в torchaudio 2.10. Добавляем совместимость.
+try:
+    import torchaudio
+    if not hasattr(torchaudio, 'AudioMetaData'):
+        from dataclasses import dataclass
+
+        @dataclass
+        class _AudioMetaData:
+            sample_rate: int = 0
+            num_frames: int = 0
+            num_channels: int = 1
+            bits_per_sample: int = 16
+            encoding: str = "PCM_S"
+
+        torchaudio.AudioMetaData = _AudioMetaData
+
+        # Восстанавливаем torchaudio.backend.common.AudioMetaData
+        if not hasattr(torchaudio, 'backend'):
+            import types
+            torchaudio.backend = types.ModuleType('torchaudio.backend')
+            torchaudio.backend.common = types.ModuleType('torchaudio.backend.common')
+            sys.modules['torchaudio.backend'] = torchaudio.backend
+            sys.modules['torchaudio.backend.common'] = torchaudio.backend.common
+        elif not hasattr(torchaudio.backend, 'common'):
+            import types
+            torchaudio.backend.common = types.ModuleType('torchaudio.backend.common')
+            sys.modules['torchaudio.backend.common'] = torchaudio.backend.common
+        torchaudio.backend.common.AudioMetaData = _AudioMetaData
+
+    if not hasattr(torchaudio, 'info'):
+        import soundfile as sf
+
+        def _torchaudio_info(filepath, **kwargs):
+            info = sf.info(str(filepath))
+            return torchaudio.AudioMetaData(
+                sample_rate=info.samplerate,
+                num_frames=info.frames,
+                num_channels=info.channels,
+                bits_per_sample=info.subtype_info.split()[0] if info.subtype_info else 16,
+                encoding=info.subtype or "PCM_S",
+            )
+
+        torchaudio.info = _torchaudio_info
+
+    # pyannote вызывает list_audio_backends() / get_audio_backend() / set_audio_backend()
+    if not hasattr(torchaudio, 'list_audio_backends'):
+        torchaudio.list_audio_backends = lambda: ["soundfile"]
+    if not hasattr(torchaudio, 'get_audio_backend'):
+        torchaudio.get_audio_backend = lambda: "soundfile"
+    if not hasattr(torchaudio, 'set_audio_backend'):
+        torchaudio.set_audio_backend = lambda backend: None
+except Exception:
+    pass
+# -----------------------------------------
+
 class Transcriber:
     """
     Профессиональный транскрибер на базе WhisperX.

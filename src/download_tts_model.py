@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-Предзагрузка модели XTTS v2 в папку приложения (установка/первый запуск).
-Скачивает модель через Coqui TTS с retry при сетевых ошибках.
+Предзагрузка моделей F5-TTS в кэш huggingface.
+Скачивает English и Russian модели с retry при сетевых ошибках.
 Запуск: python download_tts_model.py
 """
 import os
 import sys
 import time
-import shutil
 import ssl
 
 # Добавляем текущую папку в path
@@ -28,135 +27,107 @@ except ImportError:
 except Exception:
     pass
 
-from core.config import APP_PATHS
+# F5-TTS English model (SWivid/F5-TTS, auto-downloads ~3 GB)
+EN_MODEL_REPO = "SWivid/F5-TTS"
 
-MODEL_NAME = "tts_models/multilingual/multi-dataset/xtts_v2"
+# F5-TTS Russian model (Misha24-10/F5-TTS_RUSSIAN)
+RU_MODEL_REPO = "Misha24-10/F5-TTS_RUSSIAN"
+RU_VOCAB_FILE = "F5TTS_v1_Base/vocab.txt"
+RU_CKPT_FILE = "F5TTS_v1_Base_v2/model_last_inference.safetensors"
+
 MAX_RETRIES = 5
-# Модель ~1.8 ГБ, директория в кэше
-MODEL_DIR_NAME = "tts_models--multilingual--multi-dataset--xtts_v2"
 
 
-def _get_tts_cache_dir():
-    """Возвращает директорию кэша TTS (та же что используется в voice_cloner)."""
-    return str(APP_PATHS["models"] / "tts")
-
-
-def _cleanup_partial_download(cache_dir):
-    """Удаляет частично скачанную модель (битые zip/файлы)."""
-    model_dir = os.path.join(cache_dir, MODEL_DIR_NAME)
-    if os.path.exists(model_dir):
-        # Проверяем, есть ли ключевые файлы модели (config.json, model.pth)
-        has_config = os.path.exists(os.path.join(model_dir, "config.json"))
-        has_model = any(
-            f.endswith(".pth") for f in os.listdir(model_dir)
-        ) if os.path.isdir(model_dir) else False
-        if not (has_config and has_model):
-            print(f"[download_tts] Удаление неполной загрузки: {model_dir}", flush=True)
-            try:
-                shutil.rmtree(model_dir)
-            except Exception as e:
-                print(f"[download_tts] Не удалось удалить {model_dir}: {e}", flush=True)
-
-    # Удаляем .zip файлы — это промежуточные файлы загрузки
-    for f in os.listdir(cache_dir) if os.path.isdir(cache_dir) else []:
-        if f.endswith(".zip") and "xtts" in f.lower():
-            zip_path = os.path.join(cache_dir, f)
-            print(f"[download_tts] Удаление частичного архива: {zip_path}", flush=True)
-            try:
-                os.unlink(zip_path)
-            except Exception:
-                pass
-
-
-def _is_model_ready(cache_dir):
-    """Проверяет, что модель полностью скачана."""
-    model_dir = os.path.join(cache_dir, MODEL_DIR_NAME)
-    if not os.path.isdir(model_dir):
-        return False
-    has_config = os.path.exists(os.path.join(model_dir, "config.json"))
-    has_model = any(f.endswith(".pth") for f in os.listdir(model_dir))
-    return has_config and has_model
-
-
-def main():
-    cache_dir = _get_tts_cache_dir()
-    os.makedirs(cache_dir, exist_ok=True)
-
-    # Перенаправляем кэш Coqui TTS
-    os.environ["COQUI_TTS_CACHE"] = cache_dir
-    os.environ["COQUI_TOS_AGREED"] = "1"
-
-    print(f"[download_tts] Кэш моделей TTS: {cache_dir}", flush=True)
-
-    # Проверяем, уже ли модель скачана
-    if _is_model_ready(cache_dir):
-        print(f"[download_tts] Модель XTTS v2 уже загружена.", flush=True)
-        return 0
-
-    print(f"[download_tts] Скачивание модели XTTS v2 (~1.8 ГБ)...", flush=True)
-
-    try:
-        from TTS.api import TTS
-    except ImportError:
-        print("[download_tts] Coqui TTS не установлен, пропуск предзагрузки.", flush=True)
-        return 0
-
-    # Патчим директорию кэша
-    try:
-        import TTS.utils.manage as _tts_manage
-        _orig = _tts_manage.get_user_data_dir
-        def _patched(appname):
-            if appname == "tts":
-                os.makedirs(cache_dir, exist_ok=True)
-                return cache_dir
-            return _orig(appname)
-        _tts_manage.get_user_data_dir = _patched
-    except Exception:
-        pass
-
+def _download_with_retry(download_fn, label):
+    """Скачивает с retry при сетевых ошибках."""
     last_error = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            # Чистим битые файлы перед попыткой
-            _cleanup_partial_download(cache_dir)
-
-            print(f"[download_tts] Попытка {attempt}/{MAX_RETRIES}...", flush=True)
-            tts = TTS(model_name=MODEL_NAME, progress_bar=True)
-            del tts  # Не нужен, освобождаем память
-
-            if _is_model_ready(cache_dir):
-                print("[download_tts] Модель XTTS v2 успешно загружена.", flush=True)
-                return 0
-            else:
-                raise RuntimeError("Модель загружена, но файлы не найдены — возможно, путь кэша некорректен")
-
+            print(f"[download_tts] {label}: attempt {attempt}/{MAX_RETRIES}...", flush=True)
+            download_fn()
+            print(f"[download_tts] {label}: OK", flush=True)
+            return True
         except Exception as e:
             last_error = e
             err_str = str(e).lower()
             is_network = any(kw in err_str for kw in [
                 "download", "connection", "timeout", "urllib3",
-                "requests", "ssl", "socket", "network", "failed to download",
+                "requests", "ssl", "socket", "network",
             ]) or isinstance(e, (ConnectionError, OSError, TimeoutError))
 
             if is_network and attempt < MAX_RETRIES:
-                wait = 10 * (2 ** (attempt - 1))  # 10, 20, 40, 80 сек
+                wait = 10 * (2 ** (attempt - 1))
                 print(
-                    f"[download_tts] Ошибка сети: {e}\n"
-                    f"[download_tts] Повтор через {wait} сек...",
+                    f"[download_tts] Network error: {e}\n"
+                    f"[download_tts] Retrying in {wait} sec...",
                     flush=True
                 )
                 time.sleep(wait)
             else:
-                print(f"[download_tts] Ошибка загрузки: {e}", flush=True)
+                print(f"[download_tts] {label} error: {e}", flush=True)
                 break
 
-    print(
-        f"[download_tts] Не удалось загрузить модель после {MAX_RETRIES} попыток.\n"
-        f"[download_tts] Последняя ошибка: {last_error}\n"
-        f"[download_tts] Модель скачается при первом запуске озвучки.",
-        flush=True
+    print(f"[download_tts] {label} failed after {MAX_RETRIES} attempts: {last_error}", flush=True)
+    return False
+
+
+def main():
+    print("[download_tts] Pre-downloading F5-TTS models...", flush=True)
+
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError:
+        print("[download_tts] huggingface_hub not installed, skipping preload.", flush=True)
+        return 0
+
+    errors = 0
+
+    # 1. English model — trigger F5-TTS internal download
+    # F5-TTS auto-downloads from SWivid/F5-TTS when first loaded
+    # We pre-download the checkpoint to cache
+    print("[download_tts] Downloading F5-TTS English model (~3 GB)...", flush=True)
+    ok = _download_with_retry(
+        lambda: hf_hub_download(
+            EN_MODEL_REPO,
+            "F5TTS_v1_Base/model_1200000.safetensors",
+        ),
+        "F5-TTS English checkpoint"
     )
-    return 1
+    if not ok:
+        errors += 1
+
+    # Also download English vocab
+    _download_with_retry(
+        lambda: hf_hub_download(EN_MODEL_REPO, "F5TTS_v1_Base/vocab.txt"),
+        "F5-TTS English vocab"
+    )
+
+    # 2. Russian model (Misha24-10/F5-TTS_RUSSIAN)
+    print("[download_tts] Downloading F5-TTS Russian model (~1 GB)...", flush=True)
+    ok = _download_with_retry(
+        lambda: hf_hub_download(RU_MODEL_REPO, RU_CKPT_FILE),
+        "F5-TTS Russian checkpoint"
+    )
+    if not ok:
+        errors += 1
+
+    ok = _download_with_retry(
+        lambda: hf_hub_download(RU_MODEL_REPO, RU_VOCAB_FILE),
+        "F5-TTS Russian vocab"
+    )
+    if not ok:
+        errors += 1
+
+    if errors == 0:
+        print("[download_tts] All F5-TTS models downloaded successfully.", flush=True)
+    else:
+        print(
+            f"[download_tts] {errors} download(s) failed. "
+            "Models will be downloaded on first TTS use.",
+            flush=True
+        )
+
+    return 1 if errors > 0 else 0
 
 
 if __name__ == "__main__":

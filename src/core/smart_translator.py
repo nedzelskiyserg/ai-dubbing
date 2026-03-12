@@ -18,30 +18,33 @@ from core.elastic_timing import compute_effective_durations
 logger = logging.getLogger(__name__)
 
 # Константы для оценки длительности речи (символов в секунду)
-# Эти значения откалиброваны для XTTS v2 при speed=1.0
+# Откалибровано для F5-TTS (flow matching, nfe_step=48).
+# F5-TTS даёт более естественную просодию, чем XTTS — темп речи немного ниже.
+# Для русского (Misha24-10/F5-TTS_RUSSIAN) темп ещё чуть медленнее из-за ударений.
 SPEECH_RATE = {
-    'ru': 13.0,    # Русский: ~13 символов/сек
-    'en': 14.5,    # Английский: ~14.5 символов/сек
-    'es': 14.0,    # Испанский
-    'fr': 14.0,    # Французский
-    'de': 13.0,    # Немецкий
-    'it': 14.0,    # Итальянский
-    'pt': 14.0,    # Португальский
-    'ja': 8.0,     # Японский (меньше символов, но сложнее)
-    'ko': 10.0,    # Корейский
-    'zh': 6.0,     # Китайский (иероглифы)
-    'ar': 12.0,    # Арабский
-    'hi': 12.0,    # Хинди
-    'pl': 13.0,    # Польский
-    'tr': 13.0,    # Турецкий
-    'nl': 14.0,    # Голландский
-    'cs': 13.0,    # Чешский
-    'hu': 13.0,    # Венгерский
+    'ru': 11.5,    # Русский: ~11.5 символов/сек (F5-TTS + RUAccent)
+    'en': 13.0,    # Английский: ~13 символов/сек
+    'es': 12.5,    # Испанский
+    'fr': 12.5,    # Французский
+    'de': 11.5,    # Немецкий
+    'it': 12.5,    # Итальянский
+    'pt': 12.5,    # Португальский
+    'ja': 7.0,     # Японский (иероглифы + кана)
+    'ko': 9.0,     # Корейский
+    'zh': 5.5,     # Китайский (иероглифы)
+    'ar': 11.0,    # Арабский
+    'hi': 11.0,    # Хинди
+    'pl': 11.5,    # Польский
+    'tr': 12.0,    # Турецкий
+    'nl': 12.5,    # Голландский
+    'cs': 11.5,    # Чешский
+    'hu': 11.5,    # Венгерский
 }
 
-# Максимальное ускорение TTS (больше = хуже качество)
-MAX_TTS_SPEED = 1.15
-# Максимальное ускорение при пост-обработке atempo
+# Бюджетный множитель: перевод может быть чуть длиннее слота,
+# потому что voice_cloner подгонит через atempo (до 1.10x) или укоротит текст.
+MAX_TTS_SPEED = 1.10
+# Максимальное ускорение при пост-обработке atempo (используется для бюджета)
 MAX_ATEMPO_SPEED = 1.10
 
 
@@ -114,18 +117,18 @@ class SmartTranslator:
         Args:
             duration_sec: Доступная длительность в секундах
             language: Код языка
-            speed: Фактор скорости TTS (1.0 = нормально, 1.15 = быстрее)
+            speed: Бюджетный множитель (1.0 = нормальный, 1.10 = с учётом atempo)
 
         Returns:
             Максимальное количество символов
         """
         lang = language.lower()[:2]
-        chars_per_sec = SPEECH_RATE.get(lang, 13.0)
+        chars_per_sec = SPEECH_RATE.get(lang, 12.0)
 
-        # С учётом скорости можно уместить больше символов
+        # С учётом бюджетного множителя можно позволить чуть больше символов
         effective_chars_per_sec = chars_per_sec * speed
 
-        # Оставляем 10% запас на паузы
+        # Оставляем 10% запас на паузы между фразами
         max_chars = int(duration_sec * effective_chars_per_sec * 0.9)
 
         return max(max_chars, 10)  # Минимум 10 символов
@@ -151,6 +154,12 @@ class SmartTranslator:
 
         data = response.json()
         return data.get("message", {}).get("content", "").strip()
+
+    @staticmethod
+    def _has_chinese_chars(text: str) -> bool:
+        """Проверяет, содержит ли текст китайские иероглифы."""
+        import re
+        return bool(re.search(r'[\u4e00-\u9fff\u3400-\u4dbf]', text))
 
     def translate_with_timing(
         self,
@@ -184,6 +193,11 @@ class SmartTranslator:
         target_name = lang_names.get(target_lang.lower()[:2], target_lang)
         target_lang_code = target_lang.lower()[:2]
 
+        # Запрет китайских символов для всех языков, кроме китайского/японского
+        no_chinese_rule = ""
+        if target_lang_code not in ("zh", "ja", "ko"):
+            no_chinese_rule = f"\n8. NEVER use Chinese characters (汉字/漢字). Output ONLY {target_name} characters."
+
         # Вычисляем лимит символов для нормальной скорости
         max_chars_normal = self.calculate_max_chars(target_duration_sec, target_lang_code, speed=1.0)
         # И для максимально допустимой скорости
@@ -199,7 +213,7 @@ CRITICAL RULES:
 4. Keep the MEANING and EMOTION intact
 5. Use natural spoken language, not written/formal style
 6. If the original is too long, rephrase concisely while preserving meaning
-7. Output ONLY the translated text, nothing else"""
+7. Output ONLY the translated text, nothing else{no_chinese_rule}"""
 
         user_prompt = f"Translate this dialogue line (must fit in {target_duration_sec:.1f} seconds, max {max_chars_fast} chars):\n\n{text}"
 
@@ -212,6 +226,20 @@ CRITICAL RULES:
 
         # Убираем возможные кавычки и лишние символы
         translated = translated.strip().strip('"\'')
+
+        # Проверяем наличие китайских символов в нецелевом языке и перезапрашиваем
+        if target_lang_code not in ("zh", "ja", "ko") and self._has_chinese_chars(translated):
+            logger.warning(f"⚠️ Ответ модели содержит китайские символы, повторный запрос...")
+            retry_prompt = (
+                f"WRONG LANGUAGE DETECTED. Your response must be in {target_name} ONLY.\n"
+                f"DO NOT use Chinese characters. Translate to {target_name}:\n\n{text}"
+            )
+            messages_retry = [
+                {"role": "system", "content": f"You are a translator. Respond ONLY in {target_name}. No Chinese characters allowed."},
+                {"role": "user", "content": retry_prompt}
+            ]
+            translated = self._call_ollama(messages_retry, temperature=0.1)
+            translated = translated.strip().strip('"\'')
 
         # Проверяем длительность перевода
         estimated_duration = self.estimate_speech_duration(translated, target_lang_code)
@@ -237,15 +265,19 @@ Current translation: "{translated}"
 
 Rewrite the translation to be SHORTER while keeping the same meaning. Use fewer words, simpler phrases.
 Target: maximum {target_chars} characters.
-Output ONLY the shortened translation."""
+Output ONLY the shortened translation in {target_name}."""
 
             messages = [
-                {"role": "system", "content": f"You are a professional dubbing translator. Shorten the {target_name} text while preserving meaning."},
+                {"role": "system", "content": f"You are a professional dubbing translator. Shorten the {target_name} text while preserving meaning. Output ONLY {target_name}."},
                 {"role": "user", "content": refine_prompt}
             ]
 
             refined = self._call_ollama(messages, temperature=0.4)
             refined = refined.strip().strip('"\'')
+
+            # Сбрасываем китайские символы если появились
+            if target_lang_code not in ("zh", "ja", "ko") and self._has_chinese_chars(refined):
+                refined = translated  # используем предыдущий вариант
 
             # Проверяем новую версию
             new_duration = self.estimate_speech_duration(refined, target_lang_code)
@@ -272,10 +304,10 @@ Write a {target_name} translation that:
 3. Sounds natural when spoken
 
 If you cannot fit everything, keep only the most important part.
-Output ONLY the translation, nothing else."""
+Output ONLY the {target_name} translation, nothing else."""
 
         messages = [
-            {"role": "system", "content": f"You are a professional dubbing translator. Output only {target_name} text."},
+            {"role": "system", "content": f"You are a professional dubbing translator. Output only {target_name} text. No Chinese characters."},
             {"role": "user", "content": final_prompt}
         ]
 

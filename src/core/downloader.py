@@ -1,5 +1,4 @@
 from pytubefix import YouTube
-# from pytubefix.cli import on_progress  <-- Убираем импорт, пишем свой
 import os
 import shutil
 import subprocess
@@ -8,8 +7,15 @@ import ssl
 import certifi
 import sys
 import platform
-# Импортируем наши пути
+import socket
 from core.config import APP_PATHS
+
+# Таймаут для сетевых операций (секунды)
+NETWORK_TIMEOUT = 30
+# Количество попыток для инициализации YouTube объекта
+INIT_MAX_RETRIES = 3
+# Количество попыток для скачивания потока
+DOWNLOAD_MAX_RETRIES = 3
 
 # Исправление SSL для Windows
 def fix_ssl():
@@ -128,59 +134,81 @@ def get_ffmpeg_path():
     
     return None
 
+def _init_youtube_with_retry(url, on_progress_callback, log_func):
+    """Инициализирует YouTube объект с retry при таймаутах."""
+    old_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(NETWORK_TIMEOUT)
+    try:
+        for attempt in range(1, INIT_MAX_RETRIES + 1):
+            try:
+                yt = YouTube(url, on_progress_callback=on_progress_callback)
+                # Принудительно запрашиваем данные, чтобы поймать таймаут здесь
+                _ = yt.title
+                return yt
+            except Exception as e:
+                err_str = str(e).lower()
+                is_network = any(kw in err_str for kw in [
+                    'timed out', 'timeout', 'urlopen error', 'connection',
+                    'errno 60', 'errno 110', 'errno 11001', 'getaddrinfo',
+                    'network', 'socket', 'ssl',
+                ])
+                if is_network and attempt < INIT_MAX_RETRIES:
+                    wait = 5 * attempt
+                    log_func(f"⚠️ Попытка {attempt}/{INIT_MAX_RETRIES}: {e}")
+                    log_func(f"   Повтор через {wait}с...")
+                    time.sleep(wait)
+                else:
+                    raise
+    finally:
+        socket.setdefaulttimeout(old_timeout)
+
+
 def download_video(url, log_func, target_quality='1080p'):
     try:
         log_func(f"🔴 (Pytubefix) Ссылка: {url}")
         log_func(f"🎯 Цель: {target_quality}")
-        
-        # --- ИСПОЛЬЗУЕМ ПРАВИЛЬНЫЙ ПУТЬ ИЗ CONFIG ---
+
         output_folder = APP_PATHS["downloads"]
         log_func(f"📂 Папка сохранения: {output_folder}")
-        # --------------------------------------------
 
         # Колбэк для прогресса
         last_percent = 0
-        
+
         def progress_function(stream, chunk, bytes_remaining):
             nonlocal last_percent
             total_size = stream.filesize
             bytes_downloaded = total_size - bytes_remaining
             percent = int((bytes_downloaded / total_size) * 100)
-            
-            # Выводим прогресс каждые 10% или если 100%
+
             if percent >= last_percent + 10 or percent == 100:
                 last_percent = percent
-                # Формируем прогресс-бар
                 bar_length = 20
                 filled_length = int(bar_length * percent // 100)
                 bar = '█' * filled_length + '-' * (bar_length - filled_length)
                 log_func(f" ↳ |{bar}| {percent}%")
 
-        # 1. Инициализация
+        # 1. Инициализация с retry
         try:
-            yt = YouTube(url, on_progress_callback=progress_function)
+            yt = _init_youtube_with_retry(url, progress_function, log_func)
         except Exception as e:
-            log_func(f"❌ Ошибка доступа: {str(e)}")
+            log_func(f"❌ Ошибка доступа к видео: {str(e)}")
             return None
 
-        # Очистка имени файла
         safe_title = "".join([c for c in yt.title if c.isalpha() or c.isdigit() or c==' ']).rstrip()
         video_title = safe_title.replace(" ", "_")
-        
+
         log_func(f"🎬 Название: {video_title}")
 
         # 2. Выбор качества
         all_resolutions = ['4320p', '2160p', '1440p', '1080p', '720p', '480p', '360p']
-        search_resolutions = []
-        
+
         if target_quality == 'max':
             search_resolutions = all_resolutions
+        elif target_quality in all_resolutions:
+            start_index = all_resolutions.index(target_quality)
+            search_resolutions = all_resolutions[start_index:]
         else:
-            if target_quality in all_resolutions:
-                start_index = all_resolutions.index(target_quality)
-                search_resolutions = all_resolutions[start_index:]
-            else:
-                search_resolutions = all_resolutions
+            search_resolutions = all_resolutions
 
         # 3. Поиск видео
         video_stream = None
@@ -191,7 +219,7 @@ def download_video(url, log_func, target_quality='1080p'):
                 size_mb = stream.filesize_mb
                 log_func(f"💎 Найдено качество: {res} ({size_mb:.1f} MB)")
                 break
-        
+
         if not video_stream:
             log_func("⚠️ Выбранное качество не найдено, беру лучшее...")
             video_stream = yt.streams.get_highest_resolution()
@@ -199,25 +227,30 @@ def download_video(url, log_func, target_quality='1080p'):
         # 4. Поиск аудио
         audio_stream = yt.streams.filter(only_audio=True).order_by("abr").desc().first()
 
-        # Создаем отдельную папку для этого видео
         video_folder_name = f"{video_title}_{video_stream.resolution}"
         video_folder = os.path.join(output_folder, video_folder_name)
         os.makedirs(video_folder, exist_ok=True)
         log_func(f"📁 Создана папка проекта: {video_folder_name}")
-        
-        # Имена файлов
+
         timestamp = int(time.time())
         temp_video_name = f"temp_v_{timestamp}.mp4"
         temp_audio_name = f"temp_a_{timestamp}.mp4"
         final_filename = f"{video_title}_{video_stream.resolution}.mp4"
         final_path = os.path.join(video_folder, final_filename)
 
-        # 5. Скачивание
+        # 5. Скачивание с retry и таймаутом
         log_func("🚀 Скачивание видео...")
-        video_stream.download(output_path=video_folder, filename=temp_video_name)
-        
+        video_stream.download(
+            output_path=video_folder, filename=temp_video_name,
+            timeout=NETWORK_TIMEOUT, max_retries=DOWNLOAD_MAX_RETRIES
+        )
+
         log_func("🚀 Скачивание аудио...")
-        audio_stream.download(output_path=video_folder, filename=temp_audio_name)
+        last_percent = 0  # Сброс прогресса для аудио
+        audio_stream.download(
+            output_path=video_folder, filename=temp_audio_name,
+            timeout=NETWORK_TIMEOUT, max_retries=DOWNLOAD_MAX_RETRIES
+        )
 
         ffmpeg_exe = get_ffmpeg_path()
         if not ffmpeg_exe:
@@ -228,7 +261,7 @@ def download_video(url, log_func, target_quality='1080p'):
         log_func("🔨 Сборка файла...")
         video_path = os.path.join(video_folder, temp_video_name)
         audio_path = os.path.join(video_folder, temp_audio_name)
-        
+
         cmd = [
             ffmpeg_exe, '-i', video_path, '-i', audio_path,
             '-c:v', 'copy', '-c:a', 'aac', '-strict', 'experimental',
@@ -242,7 +275,6 @@ def download_video(url, log_func, target_quality='1080p'):
             log_func(f"❌ Ошибка FFmpeg: {stderr.decode()}")
             return None
 
-        # Чистим temp
         if os.path.exists(video_path): os.remove(video_path)
         if os.path.exists(audio_path): os.remove(audio_path)
 

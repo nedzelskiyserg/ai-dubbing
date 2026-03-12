@@ -429,12 +429,20 @@ function startApiServer() {
     apiPath = path.join(__dirname, '../../src/api_server.py');
     cwd = path.join(__dirname, '../..');
 
-    // Проверяем наличие venv
-    const venvPython = process.platform === 'win32'
-      ? path.join(__dirname, '../../.venv/Scripts/python.exe')
-      : path.join(__dirname, '../../.venv/bin/python3');
+    // Проверяем наличие venv (приоритет: venv_tts > .venv_f5tts > .venv > system)
+    const venvCandidates = ['venv_tts', '.venv_f5tts', '.venv'];
+    let venvPython = null;
+    for (const venvName of venvCandidates) {
+      const candidate = process.platform === 'win32'
+        ? path.join(__dirname, `../../${venvName}/Scripts/python.exe`)
+        : path.join(__dirname, `../../${venvName}/bin/python3`);
+      if (fs.existsSync(candidate)) {
+        venvPython = candidate;
+        break;
+      }
+    }
 
-    pythonPath = process.env.PYTHON_PATH || (fs.existsSync(venvPython) ? venvPython : (process.platform === 'win32' ? 'python' : 'python3'));
+    pythonPath = process.env.PYTHON_PATH || (venvPython || (process.platform === 'win32' ? 'python' : 'python3'));
   }
 
   // Уникальный файл на каждый запуск — иначе читаем порт от предыдущего процесса

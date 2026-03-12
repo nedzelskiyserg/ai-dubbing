@@ -17,17 +17,22 @@ googletrans==4.0.0rc1
 # После установки numpy 2.x нужно переустановить scipy и sklearn:
 # pip install --force-reinstall scipy scikit-learn
 numpy>=2.1.0
-# Voice Cloning (Coqui XTTS v2)
-# Примечание: TTS требует Python 3.10+
-# Если Python < 3.10, используйте: brew install python@3.11
-# Затем создайте venv: python3.11 -m venv venv && source venv/bin/activate
-# Для PyTorch 2.9+ требуется: coqui-tts[codec]
-coqui-tts[codec]>=0.27.0
+# F5-TTS — TTS engine (Diffusion Transformer + ConvNeXt V2, Flow Matching)
+# Requires Python 3.10+
+f5-tts>=1.1.17
+# RUAccent — русские ударения для естественного произношения в TTS
+ruaccent
+librosa==0.10.2
+onnxruntime>=1.19.0; sys_platform == 'darwin' or sys_platform == 'win32'
+onnxruntime-gpu>=1.19.0; sys_platform == 'linux'
+openai-whisper
+soundfile==0.12.1
+transformers>=4.40.0
 pydub
+scipy>=1.10.0
 # Готовые голоса (Microsoft Edge Neural TTS)
 edge-tts>=7.0.0
-# Noise reduction for TTS output (убирает "квакание" и артефакты)
+# Noise reduction for TTS output
 noisereduce>=3.0.0
-scipy>=1.10.0
 # Video Assembly
 moviepy>=1.0.3

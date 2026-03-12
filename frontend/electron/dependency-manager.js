@@ -481,22 +481,22 @@ async function installAll(onProgress) {
     log('models', 100, 'Скрипт предзагрузки не найден, модель скачается при первом запуске');
   }
 
-  // 3.6. Предзагрузка модели XTTS v2 (~1.8 ГБ) для озвучки
+  // 3.6. Предзагрузка моделей F5-TTS (~4 ГБ: English ~3 ГБ + Russian ~1 ГБ) для озвучки
   const downloadTtsScript = srcPath ? path.join(srcPath, 'download_tts_model.py') : null;
   if (downloadTtsScript && fs.existsSync(downloadTtsScript)) {
-    log('models', 0, 'Скачивание модели XTTS v2 (~1.8 ГБ) для озвучки. Это может занять несколько минут...');
+    log('models', 0, 'Скачивание моделей F5-TTS (~4 ГБ) для озвучки. Это может занять несколько минут...');
     try {
       await runProcess(getPythonExe(), [downloadTtsScript], {
         cwd: srcPath,
         env: getPythonEnv(),
-        timeout: 900000, // 15 мин (модель ~1.8 ГБ + retry)
+        timeout: 1800000, // 30 мин (English ~3 ГБ + Russian ~1 ГБ + retry)
       }, (line) => {
         const trimmed = line.trim();
         if (trimmed) log('models', 75, trimmed);
       });
-      log('models', 100, 'Модель XTTS v2 загружена');
+      log('models', 100, 'Модели F5-TTS загружены');
     } catch (err) {
-      log('models', 100, 'Предзагрузка XTTS пропущена (модель скачается при первом запуске озвучки). ' + (err.message || ''));
+      log('models', 100, 'Предзагрузка F5-TTS пропущена (модели скачаются при первом запуске озвучки). ' + (err.message || ''));
     }
   }
 

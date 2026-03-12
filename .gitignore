@@ -4,8 +4,8 @@
 __pycache__/
 *.py[cod]
 *$py.class
-.venv/
-venv/
+.venv*/
+venv*/
 env/
 .env
 
@@ -25,10 +25,10 @@ pnpm-debug.log*
 # ==========================
 # 🏗️ ELECTRON / TAURI BUILDS
 # ==========================
-# Папки, куда собирается приложение
 out/
 release/
 src-tauri/target/
+frontend/dist-electron/
 
 # ==========================
 # 🤖 AI MODELS (Критично!)
@@ -39,36 +39,37 @@ src-tauri/target/
 *.bin
 *.onnx
 *.tflite
-# Папки кэша моделей (если они создаются локально)
 models/
 tts_models/
 deepfilter_models/
+CosyVoice/
 
 # ==========================
-# 🎬 MEDIA & DATA (Твой проект)
+# 🎬 MEDIA & DATA
 # ==========================
-# Исходники, скачанные видео
 downloads/
-tests/downloads/
-
-# Результаты работы
 output/
 *_dubbed.mp4
-
-# Временные файлы (нарезка аудио, куски TTS)
 temp/
 tts_parts/
-
-# Сэмплы голосов (ты их генерируешь на лету)
 voices/
+cookies.txt
 
-# Любые тяжелые медиафайлы в корне (на всякий случай)
+# Медиафайлы в корне
 *.wav
 *.mp3
 *.mp4
 *.mkv
 *.mov
 *.flac
+
+# ==========================
+# 🧪 ТЕСТЫ (временные)
+# ==========================
+test_*.py
+test_output*/
+verify_*.py
+tests/downloads/
 
 # ==========================
 # 🍏 MACOS & WINDOWS SYSTEM
@@ -78,12 +79,12 @@ voices/
 .LSOverride
 Thumbs.db
 Desktop.ini
-$RECYCLE.BIN/ 
+$RECYCLE.BIN/
 
 # ==========================
-# ⚙️ IDE SETTINGS
+# ⚙️ IDE & TOOLS
 # ==========================
 .vscode/
 .idea/
 *.swp
-venv_tts/
+.claude/
