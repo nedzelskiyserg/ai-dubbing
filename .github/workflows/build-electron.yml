@@ -3,6 +3,7 @@ name: Build Electron App (AI Dubbing Studio)
 on:
   push:
     branches: [ "main" ]
+    tags: [ "v*" ]  # Тег v1.0.1 и т.д. → создаёт GitHub Release для auto-update
   workflow_dispatch:
 
 jobs:
@@ -120,12 +121,12 @@ jobs:
           Write-Host "⚠️ .env не найден, пропускаем"
         }
 
-    # 8. Собираем Electron приложение (лёгкий установщик — без Python/FFmpeg)
+    # 8. Собираем Electron приложение
     - name: Build Electron app
       working-directory: ./frontend
       run: |
-        Write-Host "🔨 Сборка Electron приложения (лёгкий установщик)..."
-        npx electron-builder --win
+        Write-Host "🔨 Сборка Electron приложения..."
+        npx electron-builder --win --publish never
 
         Write-Host "📋 Проверка созданных файлов..."
         Get-ChildItem -Path dist-electron -Filter *.exe | ForEach-Object {
@@ -135,11 +136,23 @@ jobs:
         ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder-cache
         CI: false
 
-    # 9. Загружаем установщик
+    # 9. Загружаем установщик как артефакт (всегда)
     - name: Upload Windows Installer
       uses: actions/upload-artifact@v5
       with:
         name: AI-Dubbing-Studio-Windows-Installer
-        path: frontend/dist-electron/*Setup*.exe
+        path: |
+          frontend/dist-electron/*Setup*.exe
+          frontend/dist-electron/latest.yml
         retention-days: 30
         if-no-files-found: error
+
+    # 10. Публикуем GitHub Release (только при пуше тега v*)
+    - name: Publish GitHub Release
+      if: startsWith(github.ref, 'refs/tags/v')
+      working-directory: ./frontend
+      run: npx electron-builder --win --publish always
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder-cache
+        CI: false

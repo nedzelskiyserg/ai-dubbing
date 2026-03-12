@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
 const depManager = require('./dependency-manager');
+const autoUpdater = require('./auto-updater');
 
 let mainWindow;
 let setupWindow;
@@ -727,6 +728,20 @@ ipcMain.handle('clipboard-write-text', (event, text) => {
   return true;
 });
 
+// IPC для обновления Electron-оболочки (пользователь нажимает "Обновить")
+ipcMain.handle('electron-update-download', () => {
+  try {
+    const { autoUpdater: electronUpdater } = require('electron-updater');
+    return electronUpdater.downloadUpdate();
+  } catch (e) { return null; }
+});
+ipcMain.handle('electron-update-install', () => {
+  try {
+    const { autoUpdater: electronUpdater } = require('electron-updater');
+    electronUpdater.quitAndInstall();
+  } catch (e) { /* ignore */ }
+});
+
 // --- Окно установки зависимостей ---
 
 /** Показывает окно установки и запускает процесс. Возвращает Promise<void> по завершении. */
@@ -880,12 +895,65 @@ app.whenReady().then(async () => {
       app.quit();
       return;
     }
+    // Инициализируем SHA для будущих обновлений (первая установка)
+    try {
+      await autoUpdater.initializeUpdateSha();
+    } catch (err) {
+      logDiag('initializeUpdateSha failed (non-critical)', { error: err.message });
+    }
+  }
+
+  // Проверяем обновления Python-кода из GitHub
+  try {
+    const updateResult = await autoUpdater.checkForPythonUpdate((step, pct, msg) => {
+      logDiag(`[${step}] ${pct}%`, { message: msg });
+    });
+    if (updateResult.updated) {
+      logDiag('Python sources updated', {
+        from: updateResult.fromSha.substring(0, 8),
+        to: updateResult.toSha.substring(0, 8),
+        files: updateResult.changedFiles.length,
+        requirementsChanged: updateResult.requirementsChanged,
+      });
+      if (updateResult.requirementsChanged) {
+        logDiag('requirements.txt changed — running pip install...');
+        await autoUpdater.installUpdatedRequirements((step, pct, msg) => {
+          logDiag(`[${step}] ${pct}%`, { message: msg });
+        });
+      }
+    }
+  } catch (err) {
+    logDiag('Auto-update check failed (non-critical)', { error: err.message });
   }
 
   // Запускаем backend
   await launchBackend();
 
   createWindow();
+
+  // Проверка обновлений Electron-оболочки (GitHub Releases)
+  if (app.isPackaged) {
+    try {
+      const { autoUpdater: electronUpdater } = require('electron-updater');
+      electronUpdater.autoDownload = false;
+      electronUpdater.logger = { info: (m) => logDiag('electron-updater', { info: m }), warn: (m) => logDiag('electron-updater', { warn: m }), error: (m) => logDiag('electron-updater', { error: m }) };
+
+      electronUpdater.on('update-available', (info) => {
+        logDiag('Доступно обновление Electron', { version: info.version });
+        if (mainWindow) mainWindow.webContents.send('electron-update-available', info.version);
+      });
+      electronUpdater.on('update-downloaded', (info) => {
+        logDiag('Обновление Electron скачано', { version: info.version });
+        if (mainWindow) mainWindow.webContents.send('electron-update-downloaded', info.version);
+      });
+
+      electronUpdater.checkForUpdates().catch(err => {
+        logDiag('electron-updater check failed (non-critical)', { error: err.message });
+      });
+    } catch (err) {
+      logDiag('electron-updater init failed', { error: err.message });
+    }
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

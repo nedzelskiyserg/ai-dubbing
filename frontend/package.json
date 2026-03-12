@@ -11,7 +11,8 @@
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-scripts": "5.0.1",
-    "electron-is-dev": "^1.2.0"
+    "electron-is-dev": "^1.2.0",
+    "electron-updater": "^6.1.7"
   },
   "devDependencies": {
     "electron": "^28.3.3",
@@ -88,7 +89,11 @@
       "artifactName": "${productName}-${version}-${arch}-Setup.${ext}"
     },
     "compression": "maximum",
-    "publish": null
+    "publish": {
+      "provider": "github",
+      "owner": "nedzelskiyserg",
+      "repo": "ai-dubbing"
+    }
   },
   "eslintConfig": {
     "extends": [

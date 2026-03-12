@@ -13,5 +13,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clipboard: {
     readText: () => ipcRenderer.invoke('clipboard-read-text'),
     writeText: (text) => ipcRenderer.invoke('clipboard-write-text', text)
+  },
+  // API для обновления Electron-оболочки
+  update: {
+    onUpdateAvailable: (cb) => ipcRenderer.on('electron-update-available', (_e, version) => cb(version)),
+    onUpdateDownloaded: (cb) => ipcRenderer.on('electron-update-downloaded', (_e, version) => cb(version)),
+    downloadUpdate: () => ipcRenderer.invoke('electron-update-download'),
+    installUpdate: () => ipcRenderer.invoke('electron-update-install'),
   }
 });
