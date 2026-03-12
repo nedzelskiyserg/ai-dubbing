@@ -1,16 +1,54 @@
-import React, { useState, useContext } from 'react';
+import React, { useState, useContext, useEffect, useRef } from 'react';
 import './AdditionalOptions.css';
 import { AppContext } from '../AppContext';
 import Dropdown from './Dropdown';
 
 const AdditionalOptions = () => {
-  const { options, setOptions } = useContext(AppContext);
+  const { options, setOptions, openrouterKeyStatus, validateOpenRouterKey } = useContext(AppContext);
   const [processingExpanded, setProcessingExpanded] = useState(true);
   const [translationExpanded, setTranslationExpanded] = useState(true);
   const [voiceExpanded, setVoiceExpanded] = useState(true);
+  const debounceRef = useRef(null);
 
   const updateOption = (key, value) => {
     setOptions(prev => ({ ...prev, [key]: value }));
+  };
+
+  // Обработчик изменения API ключа с debounce-валидацией
+  const handleApiKeyChange = (value) => {
+    updateOption('openrouterApiKey', value);
+
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+
+    if (!value || !value.trim()) {
+      validateOpenRouterKey('');
+      return;
+    }
+
+    debounceRef.current = setTimeout(() => {
+      validateOpenRouterKey(value);
+    }, 600);
+  };
+
+  // Очистка таймера при размонтировании
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []);
+
+  const keyStatusLabel = {
+    idle: '',
+    checking: 'CHECKING...',
+    valid: 'VALID',
+    invalid: 'INVALID KEY',
+  };
+
+  const keyStatusClass = {
+    idle: '',
+    checking: 'status-checking',
+    valid: 'status-valid',
+    invalid: 'status-invalid',
   };
 
   return (
@@ -138,12 +176,34 @@ const AdditionalOptions = () => {
                     value={options.provider}
                     onChange={(value) => updateOption('provider', value)}
                     options={[
-                      { value: 'QUALITY API', label: 'QUALITY API' },
-                      { value: 'Ollama', label: 'Ollama (LLM)' }
+                      { value: 'OpenRouter', label: 'OpenRouter (Gemini 3.0 Flash)' },
+                      { value: 'Ollama', label: 'Ollama (LLM)' },
+                      { value: 'QUALITY API', label: 'QUALITY API' }
                     ]}
                   />
                 </div>
               </div>
+              {options.provider === 'OpenRouter' && (
+                <div className="options-row api-key-row">
+                  <div className="field-group full-width">
+                    <div className="field-label-row">
+                      <div className="field-label">OPENROUTER API KEY</div>
+                      {openrouterKeyStatus !== 'idle' && (
+                        <span className={`key-status ${keyStatusClass[openrouterKeyStatus]}`}>
+                          {keyStatusLabel[openrouterKeyStatus]}
+                        </span>
+                      )}
+                    </div>
+                    <input
+                      type="password"
+                      className={`api-key-input ${openrouterKeyStatus === 'valid' ? 'input-valid' : ''} ${openrouterKeyStatus === 'invalid' ? 'input-invalid' : ''}`}
+                      value={options.openrouterApiKey || ''}
+                      onChange={(e) => handleApiKeyChange(e.target.value)}
+                      placeholder="sk-or-..."
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           </div>
           <div className="divider"></div>

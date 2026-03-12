@@ -73,7 +73,7 @@
 }
 
 .field-group:nth-child(3) {
-  width: 140px;
+  width: 220px;
 }
 
 .field-group:nth-child(4) {
@@ -116,4 +116,69 @@
   font-family: 'IBM Plex Mono', monospace;
   font-size: 10px;
   color: #F5F5F0;
+}
+
+/* ── API Key Input ──────────────────────────────────── */
+
+.api-key-row {
+  margin-top: 4px;
+}
+
+.field-group.full-width {
+  width: 100%;
+}
+
+.field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.key-status {
+  font-family: 'Geist Mono', monospace;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  transition: color 0.2s;
+}
+
+.status-checking {
+  color: #FFD600;
+}
+
+.status-valid {
+  color: #4CAF50;
+}
+
+.status-invalid {
+  color: #FF4444;
+}
+
+.api-key-input {
+  font-family: 'Geist Mono', monospace;
+  font-size: 12px;
+  background: #111111;
+  border: 1px solid #333333;
+  color: #F5F5F0;
+  padding: 8px 12px;
+  outline: none;
+  transition: border-color 0.2s;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.api-key-input:focus {
+  border-color: #FFD600;
+}
+
+.api-key-input.input-valid {
+  border-color: #4CAF50;
+}
+
+.api-key-input.input-invalid {
+  border-color: #FF4444;
+}
+
+.api-key-input::placeholder {
+  color: #4D4D4D;
 }

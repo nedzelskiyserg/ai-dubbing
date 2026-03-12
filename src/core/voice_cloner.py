@@ -926,11 +926,42 @@ class VoiceCloner:
         fallback_sample = list(speaker_samples.values())[0] if speaker_samples else None
 
         # Ref texts per speaker
+        # При кросс-язычном дубляже ref_text должен быть на языке target,
+        # иначе F5-TTS галлюцинирует (артефакты, лишние слова).
         _generic_ref_texts = {
             "en": "This is a sample of my voice for cloning purposes.",
             "ru": "Это образец моего голоса для клонирования.",
+            "es": "Esta es una muestra de mi voz para fines de clonación.",
+            "fr": "Ceci est un échantillon de ma voix à des fins de clonage.",
+            "de": "Dies ist eine Probe meiner Stimme zum Klonen.",
+            "it": "Questo è un campione della mia voce per la clonazione.",
+            "pt": "Esta é uma amostra da minha voz para fins de clonagem.",
+            "ja": "これは音声クローン用のサンプルです。",
+            "ko": "이것은 음성 복제를 위한 샘플입니다.",
+            "zh": "这是我的声音克隆样本。",
         }
         _default_ref_text = _generic_ref_texts.get(target_lang, _generic_ref_texts["en"])
+
+        # Определяем исходный язык из первых сегментов (original_text)
+        _source_lang = None
+        for seg in segments[:5]:
+            orig = seg.get("original_text", "")
+            if orig:
+                if any('\u0400' <= c <= '\u04FF' for c in orig):
+                    _source_lang = "ru"
+                elif any('\u4e00' <= c <= '\u9fff' for c in orig):
+                    _source_lang = "zh"
+                elif any('\u3040' <= c <= '\u309f' or '\u30a0' <= c <= '\u30ff' for c in orig):
+                    _source_lang = "ja"
+                elif any('\uac00' <= c <= '\ud7af' for c in orig):
+                    _source_lang = "ko"
+                else:
+                    _source_lang = "en"
+                break
+
+        _cross_lingual = _source_lang is not None and _source_lang != target_lang
+        if _cross_lingual:
+            self._log(f"   Cross-lingual dubbing: {_source_lang} → {target_lang}, using generic ref_text")
 
         updated_segments = []
         success_count = 0
@@ -980,7 +1011,13 @@ class VoiceCloner:
                 seg_start = time.time()
 
                 # ref_text для спикера
-                ref_text = self._speaker_ref_texts.get(speaker, _default_ref_text)
+                # При кросс-язычном дубляже всегда используем generic ref_text
+                # на целевом языке, чтобы F5-TTS не галлюцинировал от
+                # несовпадения языка ref_text и gen_text
+                if _cross_lingual:
+                    ref_text = _default_ref_text
+                else:
+                    ref_text = self._speaker_ref_texts.get(speaker, _default_ref_text)
 
                 # ── Timing-aware generation with retry ──────────────────
                 wav, actual_duration, final_text = self._generate_with_timing(

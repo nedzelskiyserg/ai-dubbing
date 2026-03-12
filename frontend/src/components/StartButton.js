@@ -4,7 +4,7 @@ import { processYouTube, processFile, getStatus, stopProcessing, healthCheck } f
 import { AppContext } from '../AppContext';
 
 const StartButton = () => {
-  const { youtubeUrl, quality, uploadedFile, options } = useContext(AppContext);
+  const { youtubeUrl, quality, uploadedFile, options, openrouterKeyStatus } = useContext(AppContext);
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
   const statusIntervalRef = useRef(null);
@@ -56,6 +56,15 @@ const StartButton = () => {
       return;
     }
 
+    // Блокируем запуск если OpenRouter выбран + перевод включён, но ключ невалидный
+    if (options.translate && options.provider === 'OpenRouter' && openrouterKeyStatus !== 'valid') {
+      const msg = openrouterKeyStatus === 'checking'
+        ? 'Подождите, идёт проверка OpenRouter API ключа...'
+        : 'Введите валидный OpenRouter API ключ для перевода.\n\nПолучите ключ на https://openrouter.ai/keys';
+      alert(msg);
+      return;
+    }
+
     setIsProcessing(true);
     setProgress(0);
     try {
@@ -83,7 +92,8 @@ const StartButton = () => {
         transcribe: options.transcribe,
         translate: options.translate,
         target_lang: options.targetLang,
-        provider: options.provider === 'QUALITY API' ? 'api' : 'ollama',
+        provider: options.provider === 'QUALITY API' ? 'api' : (options.provider === 'OpenRouter' ? 'openrouter' : 'ollama'),
+        openrouter_api_key: options.openrouterApiKey || '',
         voice_cloning: options.voiceEnabled,
         use_preset_voices: options.usePresetVoices,
       };

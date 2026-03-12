@@ -345,8 +345,17 @@ def process_youtube_sync(url, quality, options):
                 if use_smart_translation:
                     add_log("🎯 Запуск УМНОГО перевода (с учётом тайминга для дубляжа)...")
                     try:
+                        # Определяем провайдер перевода: openrouter или ollama
+                        translation_provider = provider  # 'api'→ollama, 'ollama'→ollama, 'openrouter'→openrouter
+                        if translation_provider == 'api':
+                            translation_provider = 'ollama'
+                        translation_model = options.get('translation_model') or options.get('ollama_model', 'qwen2.5:7b')
+                        openrouter_key = options.get('openrouter_api_key', '') or os.environ.get('OPENROUTER_API_KEY', '')
+
                         smart_translator = SmartTranslator(
-                            model=options.get('ollama_model', 'qwen2.5:7b'),
+                            model=translation_model,
+                            provider=translation_provider,
+                            api_key=openrouter_key,
                             progress_callback=add_log,
                             should_stop_callback=check_should_stop
                         )
@@ -907,8 +916,16 @@ def process_file_sync(file_path, options):
                 if use_smart_translation:
                     add_log("🎯 Запуск УМНОГО перевода (с учётом тайминга для дубляжа)...")
                     try:
+                        translation_provider = provider
+                        if translation_provider == 'api':
+                            translation_provider = 'ollama'
+                        translation_model = options.get('translation_model') or options.get('ollama_model', 'qwen2.5:7b')
+                        openrouter_key = options.get('openrouter_api_key', '') or os.environ.get('OPENROUTER_API_KEY', '')
+
                         smart_translator = SmartTranslator(
-                            model=options.get('ollama_model', 'qwen2.5:7b'),
+                            model=translation_model,
+                            provider=translation_provider,
+                            api_key=openrouter_key,
                             progress_callback=add_log,
                             should_stop_callback=check_should_stop
                         )

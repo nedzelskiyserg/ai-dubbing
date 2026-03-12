@@ -4,12 +4,13 @@ Smart Translator — профессиональный перевод с учёт
 
 Ключевые особенности:
 - Batch-перевод: несколько сегментов за один вызов LLM (5-10x быстрее)
-- Перевод через локальный LLM (Ollama) с учётом ограничения по длительности
+- Поддержка Ollama (локально) и OpenRouter (облако, Gemini Flash и др.)
 - Оценка длительности речи до генерации TTS
 - Итеративное уточнение только для сегментов с превышением бюджета
 - Сохранение смысла при сокращении текста
 """
 import json
+import os
 import re
 import requests
 import time
@@ -45,33 +46,57 @@ MAX_TTS_SPEED = 1.10
 MAX_ATEMPO_SPEED = 1.10
 
 # Batch-перевод: сколько сегментов переводить за один вызов LLM
-BATCH_SIZE = 6
+BATCH_SIZE_OLLAMA = 6
+BATCH_SIZE_OPENROUTER = 12  # Облачные модели быстрее — можно больший batch
+
+# OpenRouter API
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_DEFAULT_MODEL = "google/gemini-3-flash-preview"
 
 
 class SmartTranslator:
     """
     Профессиональный переводчик для дубляжа с учётом временных ограничений.
     Batch-режим: переводит несколько сегментов за один вызов LLM.
+    Поддерживает Ollama (локально) и OpenRouter (облако).
     """
 
     def __init__(
         self,
         ollama_url: str = "http://localhost:11434",
         model: str = "qwen2.5:7b",
+        provider: str = "ollama",
+        api_key: Optional[str] = None,
         progress_callback: Optional[Callable[[str], None]] = None,
         should_stop_callback: Optional[Callable[[], bool]] = None
     ):
+        self.provider = provider.lower()  # 'ollama' or 'openrouter'
         self.ollama_url = ollama_url.rstrip('/')
-        self.model = model
+        self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
         self.progress_callback = progress_callback or (lambda msg: None)
         self.should_stop_callback = should_stop_callback
         self._ollama_available = None
+
+        # Выбираем модель в зависимости от провайдера
+        if self.provider == "openrouter":
+            self.model = model if model != "qwen2.5:7b" else OPENROUTER_DEFAULT_MODEL
+            self.batch_size = BATCH_SIZE_OPENROUTER
+        else:
+            self.model = model
+            self.batch_size = BATCH_SIZE_OLLAMA
 
     def _log(self, message: str):
         self.progress_callback(message)
         logger.info(message)
 
-    def _check_ollama_available(self) -> bool:
+    def _check_provider_available(self) -> bool:
+        """Проверяет доступность выбранного провайдера."""
+        if self.provider == "openrouter":
+            if not self.api_key:
+                return False
+            return True  # Проверка ключа будет при первом вызове
+
+        # Ollama
         if self._ollama_available is not None:
             return self._ollama_available
         try:
@@ -99,6 +124,13 @@ class SmartTranslator:
         max_chars = int(duration_sec * effective_chars_per_sec * 0.9)
         return max(max_chars, 10)
 
+    def _call_llm(self, messages: List[Dict], temperature: float = 0.3,
+                  num_predict: int = 500) -> str:
+        """Единый диспетчер вызовов LLM — Ollama или OpenRouter."""
+        if self.provider == "openrouter":
+            return self._call_openrouter(messages, temperature, num_predict)
+        return self._call_ollama(messages, temperature, num_predict)
+
     def _call_ollama(self, messages: List[Dict], temperature: float = 0.3,
                      num_predict: int = 500) -> str:
         payload = {
@@ -118,6 +150,34 @@ class SmartTranslator:
         response.raise_for_status()
         data = response.json()
         return data.get("message", {}).get("content", "").strip()
+
+    def _call_openrouter(self, messages: List[Dict], temperature: float = 0.3,
+                         num_predict: int = 500) -> str:
+        """Вызов OpenRouter API (OpenAI-compatible)."""
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/nedzelskiyserg/ai-dubbing",
+            "X-Title": "AI Dubbing Studio"
+        }
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": num_predict,
+        }
+        response = requests.post(
+            OPENROUTER_API_URL,
+            headers=headers,
+            json=payload,
+            timeout=120
+        )
+        response.raise_for_status()
+        data = response.json()
+        choices = data.get("choices", [])
+        if choices:
+            return choices[0].get("message", {}).get("content", "").strip()
+        return ""
 
     @staticmethod
     def _has_chinese_chars(text: str) -> bool:
@@ -178,7 +238,7 @@ RULES:
 
         # Увеличиваем num_predict для batch-ответа
         num_predict = max(500, len(batch) * 200)
-        raw = self._call_ollama(messages, temperature=0.3, num_predict=num_predict)
+        raw = self._call_llm(messages, temperature=0.3, num_predict=num_predict)
 
         # Парсим JSON из ответа
         translations = self._parse_batch_response(raw, len(batch))
@@ -266,7 +326,7 @@ CRITICAL RULES:
             {"role": "user", "content": user_prompt}
         ]
 
-        translated = self._call_ollama(messages, temperature=0.3)
+        translated = self._call_llm(messages, temperature=0.3)
         translated = translated.strip().strip('"\'')
 
         if target_lang_code not in ("zh", "ja", "ko") and self._has_chinese_chars(translated):
@@ -274,7 +334,7 @@ CRITICAL RULES:
                 {"role": "system", "content": f"Translate to {target_name} ONLY. No Chinese characters."},
                 {"role": "user", "content": f"Translate to {target_name}:\n\n{text}"}
             ]
-            translated = self._call_ollama(messages_retry, temperature=0.1)
+            translated = self._call_llm(messages_retry, temperature=0.1)
             translated = translated.strip().strip('"\'')
 
         estimated_duration = self.estimate_speech_duration(translated, target_lang_code)
@@ -297,7 +357,7 @@ CRITICAL RULES:
                 {"role": "system", "content": f"Shorten the {target_name} dubbing text. Output ONLY {target_name}."},
                 {"role": "user", "content": refine_prompt}
             ]
-            refined = self._call_ollama(messages, temperature=0.4)
+            refined = self._call_llm(messages, temperature=0.4)
             refined = refined.strip().strip('"\'')
 
             if target_lang_code not in ("zh", "ja", "ko") and self._has_chinese_chars(refined):
@@ -338,7 +398,12 @@ CRITICAL RULES:
             self._log("ℹ️ Список сегментов пуст")
             return []
 
-        if not self._check_ollama_available():
+        if not self._check_provider_available():
+            if self.provider == "openrouter":
+                raise RuntimeError(
+                    "OpenRouter API ключ не указан. Получите ключ на https://openrouter.ai/keys\n"
+                    "Укажите его в настройках или в переменной окружения OPENROUTER_API_KEY"
+                )
             import sys
             if sys.platform == 'win32':
                 raise RuntimeError(
@@ -364,8 +429,9 @@ CRITICAL RULES:
 
         target_lang_code = target_lang.lower()[:2]
 
-        self._log(f"🎯 Batch-перевод: {source_lang} → {target_lang} ({len(segments)} сегментов, batch={BATCH_SIZE})")
-        self._log(f"🤖 Модель: {self.model}")
+        provider_label = "OpenRouter" if self.provider == "openrouter" else "Ollama"
+        self._log(f"🎯 Batch-перевод: {source_lang} → {target_lang} ({len(segments)} сегментов, batch={self.batch_size})")
+        self._log(f"🤖 {provider_label}: {self.model}")
 
         # Elastic Timing
         compute_effective_durations(segments, total_duration_sec=None)
@@ -395,10 +461,10 @@ CRITICAL RULES:
 
         # ── Batch-перевод ───────────────────────────────────────────
         batches = []
-        for b_start in range(0, len(indexed_segments), BATCH_SIZE):
-            batches.append(indexed_segments[b_start:b_start + BATCH_SIZE])
+        for b_start in range(0, len(indexed_segments), self.batch_size):
+            batches.append(indexed_segments[b_start:b_start + self.batch_size])
 
-        self._log(f"📦 {len(batches)} batch(ей) по {BATCH_SIZE} сегментов")
+        self._log(f"📦 {len(batches)} batch(ей) по {self.batch_size} сегментов")
 
         processed = 0
         for batch_idx, batch in enumerate(batches):
@@ -483,7 +549,7 @@ CRITICAL RULES:
                             {"role": "system", "content": f"Shorten the {target_name} dubbing text. Output ONLY {target_name}."},
                             {"role": "user", "content": refine_prompt}
                         ]
-                        refined = self._call_ollama(messages, temperature=0.4)
+                        refined = self._call_llm(messages, temperature=0.4)
                         refined = refined.strip().strip('"\'')
 
                         if target_lang_code not in ("zh", "ja", "ko") and self._has_chinese_chars(refined):
@@ -535,12 +601,16 @@ def smart_translate_segments(
     source_lang: Optional[str] = None,
     ollama_url: str = "http://localhost:11434",
     model: str = "qwen2.5:7b",
+    provider: str = "ollama",
+    api_key: Optional[str] = None,
     progress_callback: Optional[Callable[[str], None]] = None,
     should_stop_callback: Optional[Callable[[], bool]] = None
 ) -> List[Dict]:
     translator = SmartTranslator(
         ollama_url=ollama_url,
         model=model,
+        provider=provider,
+        api_key=api_key,
         progress_callback=progress_callback,
         should_stop_callback=should_stop_callback
     )
