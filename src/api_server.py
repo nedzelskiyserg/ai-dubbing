@@ -47,8 +47,13 @@ def _ensure_requirements():
         if not req_file.exists():
             return
         req_hash = hashlib.md5(req_file.read_bytes()).hexdigest()
-        # Хеш-файл рядом с python.exe (в embedded) или в src
-        hash_file = Path(sys.executable).parent / '.requirements-hash'
+        # Хеш-файл в базовой директории приложения (совпадает с dependency-manager.js)
+        # Windows: %LOCALAPPDATA%/AI Dubbing Studio/.requirements-hash
+        if sys.platform == 'win32':
+            base_dir = Path(os.environ.get('LOCALAPPDATA', '')) / 'AI Dubbing Studio'
+        else:
+            base_dir = Path(sys.executable).parent
+        hash_file = base_dir / '.requirements-hash'
         saved_hash = ''
         if hash_file.exists():
             saved_hash = hash_file.read_text().strip()
