@@ -19,6 +19,10 @@ contextBridge.exposeInMainWorld('setupAPI', {
   onError: (callback) => {
     ipcRenderer.on('setup-error', (_event, errorMessage) => callback(errorMessage));
   },
+  /** Подписка на инициализацию шагов (hasPackages: boolean) */
+  onInitSteps: (callback) => {
+    ipcRenderer.on('setup-init-steps', (_event, hasPackages) => callback(hasPackages));
+  },
   /** Отмена установки (закрытие приложения) */
   cancel: () => {
     ipcRenderer.send('setup-cancel');

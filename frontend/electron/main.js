@@ -806,12 +806,12 @@ function runSetupWindow() {
   });
 }
 
-/** Показывает окно загрузки моделей. Возвращает Promise<void> по завершении. */
-function runModelsDownloadWindow(modelsStatus) {
+/** Показывает окно загрузки моделей (и опционально обновления зависимостей). Возвращает Promise<void>. */
+function runModelsDownloadWindow(modelsStatus, requirementsNeedUpdate) {
   return new Promise((resolve) => {
     const modelsWindow = new BrowserWindow({
       width: 520,
-      height: 340,
+      height: requirementsNeedUpdate ? 380 : 340,
       resizable: false,
       frame: false,
       backgroundColor: '#1A1A1A',
@@ -837,7 +837,10 @@ function runModelsDownloadWindow(modelsStatus) {
       modelsWindow.show();
       modelsWindow.center();
 
-      // Отправляем начальное состояние
+      // Сообщаем UI есть ли шаг packages
+      modelsWindow.webContents.send('setup-init-steps', !!requirementsNeedUpdate);
+
+      // Отправляем начальное состояние моделей
       if (modelsStatus.whisperOk) {
         modelsWindow.webContents.send('setup-progress', 'models-whisper', 100, 'Модель Whisper уже загружена');
       }
@@ -845,13 +848,28 @@ function runModelsDownloadWindow(modelsStatus) {
         modelsWindow.webContents.send('setup-progress', 'models-tts', 100, 'Модели F5-TTS уже загружены');
       }
 
-      depManager.downloadModels((step, pct, msg) => {
+      const sendProgress = (step, pct, msg) => {
         if (modelsWindow && !modelsWindow.isDestroyed()) {
           modelsWindow.webContents.send('setup-progress', step, pct, msg);
         }
-        logDiag(`models [${step}] ${pct}%`, { message: msg });
-      }).then(() => {
-        logDiag('Загрузка моделей завершена');
+        logDiag(`setup [${step}] ${pct}%`, { message: msg });
+      };
+
+      (async () => {
+        // 1. Обновление зависимостей (если нужно)
+        if (requirementsNeedUpdate) {
+          try {
+            await depManager.ensureRequirements((step, pct, msg) => sendProgress(step, pct, msg));
+          } catch (err) {
+            logDiag('ensureRequirements error in window', { error: err.message });
+            sendProgress('packages', 100, 'Ошибка обновления зависимостей: ' + (err.message || ''));
+          }
+        }
+
+        // 2. Загрузка моделей
+        await depManager.downloadModels((step, pct, msg) => sendProgress(step, pct, msg));
+      })().then(() => {
+        logDiag('Загрузка завершена');
         if (modelsWindow && !modelsWindow.isDestroyed()) {
           modelsWindow.webContents.send('setup-complete');
           setTimeout(() => {
@@ -859,7 +877,7 @@ function runModelsDownloadWindow(modelsStatus) {
           }, 1500);
         }
       }).catch((err) => {
-        logDiag('Ошибка загрузки моделей', { error: err.message });
+        logDiag('Ошибка загрузки', { error: err.message });
         if (modelsWindow && !modelsWindow.isDestroyed()) {
           modelsWindow.webContents.send('setup-error', err.message);
         }
@@ -989,25 +1007,21 @@ app.whenReady().then(async () => {
     logDiag('Auto-update check failed (non-critical)', { error: err.message });
   }
 
-  // Проверяем и доустанавливаем Python-зависимости (если requirements.txt изменился)
-  try {
-    await depManager.ensureRequirements((step, pct, msg) => {
-      logDiag(`[${step}] ${pct}%`, { message: msg });
-    });
-  } catch (err) {
-    logDiag('ensureRequirements failed (non-critical)', { error: err.message });
-  }
+  // Проверяем необходимость обновления Python-зависимостей
+  const requirementsNeedUpdate = depManager.checkRequirementsChanged();
+  logDiag('Проверка requirements.txt', { needUpdate: requirementsNeedUpdate });
 
   // Проверяем наличие моделей (Whisper + F5-TTS)
   const modelsStatus = depManager.checkModels();
   logDiag('Состояние моделей', modelsStatus);
 
-  if (!modelsStatus.allOk) {
-    logDiag('Модели не загружены — показываем окно загрузки');
+  // Показываем окно если нужно обновить зависимости ИЛИ скачать модели
+  if (requirementsNeedUpdate || !modelsStatus.allOk) {
+    logDiag('Показываем окно подготовки', { requirementsNeedUpdate, modelsOk: modelsStatus.allOk });
     try {
-      await runModelsDownloadWindow(modelsStatus);
+      await runModelsDownloadWindow(modelsStatus, requirementsNeedUpdate);
     } catch (err) {
-      logDiag('Model download window error (non-critical)', { error: err.message });
+      logDiag('Setup window error (non-critical)', { error: err.message });
     }
   }
 

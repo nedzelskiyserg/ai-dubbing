@@ -124,16 +124,20 @@
 </head>
 <body>
   <div class="container">
-    <h1>Загрузка AI-моделей</h1>
-    <p class="subtitle">Необходимо скачать модели для работы. Это делается один раз.</p>
+    <h1>Подготовка к работе</h1>
+    <p class="subtitle">Установка компонентов и загрузка моделей. Это делается один раз.</p>
 
     <div class="steps">
-      <div class="step" id="step-models-whisper">
+      <div class="step" id="step-packages" style="display:none">
         <div class="step-icon">1</div>
+        <div class="step-label">Обновление Python-зависимостей</div>
+      </div>
+      <div class="step" id="step-models-whisper">
+        <div class="step-icon" id="icon-whisper">1</div>
         <div class="step-label">Whisper large-v3 — распознавание речи (~3 ГБ)</div>
       </div>
       <div class="step" id="step-models-tts">
-        <div class="step-icon">2</div>
+        <div class="step-icon" id="icon-tts">2</div>
         <div class="step-label">F5-TTS — синтез речи (~4 ГБ)</div>
       </div>
     </div>
@@ -152,9 +156,24 @@
   </div>
 
   <script>
-    const STEPS = ['models-whisper', 'models-tts'];
-    const stepWeights = { 'models-whisper': 40, 'models-tts': 60 };
+    let STEPS = ['models-whisper', 'models-tts'];
+    let stepWeights = { 'models-whisper': 40, 'models-tts': 60 };
     const stepPercents = {};
+
+    // Показать шаг packages если main.js сообщит о нём
+    window.setupAPI.onInitSteps && window.setupAPI.onInitSteps((hasPackages) => {
+      if (hasPackages) {
+        STEPS = ['packages', 'models-whisper', 'models-tts'];
+        stepWeights = { 'packages': 15, 'models-whisper': 35, 'models-tts': 50 };
+        stepPercents['packages'] = 0;
+        const pkgEl = document.getElementById('step-packages');
+        pkgEl.style.display = '';
+        // Перенумеровать шаги
+        document.getElementById('icon-whisper').textContent = '2';
+        document.getElementById('icon-tts').textContent = '3';
+      }
+    });
+
     STEPS.forEach(s => { stepPercents[s] = 0; });
 
     function updateOverallProgress() {

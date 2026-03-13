@@ -775,9 +775,35 @@ async function ensureRequirements(onProgress) {
   }
 }
 
+/**
+ * Быстрая проверка: изменился ли requirements.txt по сравнению с сохранённым хешем.
+ * Не запускает pip — только сравнивает хеши.
+ * @returns {boolean} true если requirements.txt изменился и нужна переустановка
+ */
+function checkRequirementsChanged() {
+  try {
+    const reqPath = getRequirementsPath();
+    const pythonExe = getPythonExe();
+    if (!reqPath || !fs.existsSync(reqPath) || !pythonExe || !fs.existsSync(pythonExe)) return false;
+
+    const crypto = require('crypto');
+    const reqContent = fs.readFileSync(reqPath, 'utf8');
+    const reqHash = crypto.createHash('md5').update(reqContent).digest('hex');
+    const hashFile = path.join(getBaseDir(), '.requirements-hash');
+
+    let savedHash = '';
+    try { savedHash = fs.readFileSync(hashFile, 'utf8').trim(); } catch (e) { /* нет файла */ }
+
+    return reqHash !== savedHash;
+  } catch (e) {
+    return false;
+  }
+}
+
 module.exports = {
   checkDependencies,
   checkModels,
+  checkRequirementsChanged,
   installAll,
   downloadModels,
   ensureRequirements,

@@ -89,7 +89,7 @@ def main():
     ok = _download_with_retry(
         lambda: hf_hub_download(
             EN_MODEL_REPO,
-            "F5TTS_v1_Base/model_1200000.safetensors",
+            "F5TTS_v1_Base/model_1250000.safetensors",
         ),
         "F5-TTS English checkpoint"
     )
