@@ -9,6 +9,7 @@ const autoUpdater = require('./auto-updater');
 let mainWindow;
 let setupWindow;
 let apiServer;
+let appStarting = true; // Флаг: приложение ещё запускается (не закрывать при window-all-closed)
 /** Порт API (5001 или следующий свободный). Заполняется после чтения API_PORT_FILE. */
 let apiPort = 5001;
 let apiPortFilePath = null;
@@ -1005,6 +1006,7 @@ app.whenReady().then(async () => {
   await launchBackend();
 
   createWindow();
+  appStarting = false;
 
   // Проверка обновлений Electron-оболочки (GitHub Releases)
   if (app.isPackaged) {
@@ -1052,6 +1054,9 @@ app.whenReady().then(async () => {
 
 // Выход когда все окна закрыты
 app.on('window-all-closed', () => {
+  // Не выходим если приложение ещё запускается (setup/models окно закрылось, но mainWindow ещё не создано)
+  if (appStarting) return;
+
   // Принудительно останавливаем все процессы
   if (apiServer) {
     console.log('Принудительное завершение API сервера при закрытии всех окон...');
