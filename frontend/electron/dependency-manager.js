@@ -459,46 +459,9 @@ async function installAll(onProgress) {
     log('packages', 100, 'Python-пакеты уже установлены');
   }
 
-  // 3.5. Предзагрузка модели Whisper large-v3 (~3 ГБ) в папку приложения
+  // 3.5. Предзагрузка моделей (Whisper + F5-TTS)
   const srcPath = getSrcPath();
-  const downloadModelsScript = srcPath ? path.join(srcPath, 'download_models.py') : null;
-  if (downloadModelsScript && fs.existsSync(downloadModelsScript)) {
-    log('models', 0, 'Скачивание модели Whisper large-v3 (~3 ГБ). Это может занять несколько минут...');
-    try {
-      await runProcess(getPythonExe(), [downloadModelsScript], {
-        cwd: srcPath,
-        env: getPythonEnv(),
-        timeout: 600000, // 10 мин
-      }, (line) => {
-        const trimmed = line.trim();
-        if (trimmed) log('models', 50, trimmed);
-      });
-      log('models', 100, 'Модель large-v3 загружена');
-    } catch (err) {
-      log('models', 100, 'Предзагрузка модели пропущена (модель скачается при первом запуске транскрипции). ' + (err.message || ''));
-    }
-  } else {
-    log('models', 100, 'Скрипт предзагрузки не найден, модель скачается при первом запуске');
-  }
-
-  // 3.6. Предзагрузка моделей F5-TTS (~4 ГБ: English ~3 ГБ + Russian ~1 ГБ) для озвучки
-  const downloadTtsScript = srcPath ? path.join(srcPath, 'download_tts_model.py') : null;
-  if (downloadTtsScript && fs.existsSync(downloadTtsScript)) {
-    log('models', 0, 'Скачивание моделей F5-TTS (~4 ГБ) для озвучки. Это может занять несколько минут...');
-    try {
-      await runProcess(getPythonExe(), [downloadTtsScript], {
-        cwd: srcPath,
-        env: getPythonEnv(),
-        timeout: 1800000, // 30 мин (English ~3 ГБ + Russian ~1 ГБ + retry)
-      }, (line) => {
-        const trimmed = line.trim();
-        if (trimmed) log('models', 75, trimmed);
-      });
-      log('models', 100, 'Модели F5-TTS загружены');
-    } catch (err) {
-      log('models', 100, 'Предзагрузка F5-TTS пропущена (модели скачаются при первом запуске озвучки). ' + (err.message || ''));
-    }
-  }
+  await downloadModels((step, pct, msg) => log(step, pct, msg));
 
   // 4. FFmpeg
   if (!status.ffmpegOk) {
@@ -633,15 +596,53 @@ function formatBytes(bytes) {
 }
 
 /**
- * Проверяет наличие предзагруженных моделей и скачивает недостающие.
- * Вызывается при каждом запуске (после installAll и auto-update).
- * Не блокирует запуск при ошибке — модели скачаются при первом использовании.
+ * Быстрая проверка наличия моделей в кэше HuggingFace (без запуска Python).
+ * Возвращает { whisperOk, ttsOk, allOk }.
+ */
+function checkModels() {
+  function hasSnapshots(dir) {
+    try {
+      const snapshotsDir = path.join(dir, 'snapshots');
+      return fs.existsSync(snapshotsDir) && fs.readdirSync(snapshotsDir).length > 0;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Whisper: кэш в Documents/AI Dubbing Studio/Models/ или %LOCALAPPDATA%/AI Dubbing Studio/Models/
+  // Повторяем логику config.py: packaged + Program Files → LOCALAPPDATA, иначе Documents
+  let whisperCache;
+  const { app } = require('electron');
+  if (app.isPackaged && isWindows) {
+    const exeDir = path.dirname(app.getPath('exe')).toLowerCase();
+    if (exeDir.includes('program files')) {
+      whisperCache = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), APP_NAME, 'Models');
+    } else {
+      whisperCache = path.join(path.dirname(app.getPath('exe')), 'Models');
+    }
+  } else {
+    whisperCache = path.join(os.homedir(), 'Documents', APP_NAME, 'Models');
+  }
+  const whisperOk = hasSnapshots(path.join(whisperCache, 'models--Systran--faster-whisper-large-v3'));
+
+  // F5-TTS: дефолтный кэш HuggingFace — ~/.cache/huggingface/hub/
+  const hfCache = path.join(os.homedir(), '.cache', 'huggingface', 'hub');
+  const ttsEnOk = hasSnapshots(path.join(hfCache, 'models--SWivid--F5-TTS'));
+  const ttsRuOk = hasSnapshots(path.join(hfCache, 'models--Misha24-10--F5-TTS_RUSSIAN'));
+  const ttsOk = ttsEnOk && ttsRuOk;
+
+  return { whisperOk, ttsOk, allOk: whisperOk && ttsOk };
+}
+
+/**
+ * Скачивает недостающие модели с прогрессом.
+ * Вызывается при каждом запуске если checkModels().allOk === false.
  *
  * @param {function} onProgress — (step, percent, message) callback
  */
-async function ensureModelsDownloaded(onProgress) {
-  const log = (pct, msg) => {
-    if (onProgress) onProgress('models', pct, msg);
+async function downloadModels(onProgress) {
+  const log = (step, pct, msg) => {
+    if (onProgress) onProgress(step, pct, msg);
   };
 
   const pythonExe = getPythonExe();
@@ -650,49 +651,60 @@ async function ensureModelsDownloaded(onProgress) {
   const srcPath = getSrcPath();
   if (!srcPath) return;
 
+  const status = checkModels();
+
   // Whisper
-  const downloadModelsScript = path.join(srcPath, 'download_models.py');
-  if (fs.existsSync(downloadModelsScript)) {
-    try {
-      log(0, 'Проверка модели Whisper...');
-      await runProcess(pythonExe, [downloadModelsScript], {
-        cwd: srcPath,
-        env: getPythonEnv(),
-        timeout: 600000,
-      }, (line) => {
-        const trimmed = line.trim();
-        if (trimmed) log(25, trimmed);
-      });
-      log(50, 'Модель Whisper OK');
-    } catch (err) {
-      log(50, 'Whisper: ' + (err.message || 'ошибка загрузки, скачается при первом запуске'));
+  if (!status.whisperOk) {
+    const script = path.join(srcPath, 'download_models.py');
+    if (fs.existsSync(script)) {
+      try {
+        log('models-whisper', 0, 'Скачивание модели Whisper large-v3 (~3 ГБ)...');
+        await runProcess(pythonExe, [script], {
+          cwd: srcPath,
+          env: getPythonEnv(),
+          timeout: 600000,
+        }, (line) => {
+          const trimmed = line.trim();
+          if (trimmed) log('models-whisper', 50, trimmed);
+        });
+        log('models-whisper', 100, 'Модель Whisper загружена');
+      } catch (err) {
+        log('models-whisper', 100, 'Whisper: ошибка загрузки, скачается при первом запуске');
+      }
     }
+  } else {
+    log('models-whisper', 100, 'Модель Whisper уже загружена');
   }
 
   // F5-TTS
-  const downloadTtsScript = path.join(srcPath, 'download_tts_model.py');
-  if (fs.existsSync(downloadTtsScript)) {
-    try {
-      log(50, 'Проверка моделей F5-TTS...');
-      await runProcess(pythonExe, [downloadTtsScript], {
-        cwd: srcPath,
-        env: getPythonEnv(),
-        timeout: 1800000,
-      }, (line) => {
-        const trimmed = line.trim();
-        if (trimmed) log(75, trimmed);
-      });
-      log(100, 'Модели F5-TTS OK');
-    } catch (err) {
-      log(100, 'F5-TTS: ' + (err.message || 'ошибка загрузки, скачается при первом запуске'));
+  if (!status.ttsOk) {
+    const script = path.join(srcPath, 'download_tts_model.py');
+    if (fs.existsSync(script)) {
+      try {
+        log('models-tts', 0, 'Скачивание моделей F5-TTS (~4 ГБ)...');
+        await runProcess(pythonExe, [script], {
+          cwd: srcPath,
+          env: getPythonEnv(),
+          timeout: 1800000,
+        }, (line) => {
+          const trimmed = line.trim();
+          if (trimmed) log('models-tts', 50, trimmed);
+        });
+        log('models-tts', 100, 'Модели F5-TTS загружены');
+      } catch (err) {
+        log('models-tts', 100, 'F5-TTS: ошибка загрузки, скачается при первом запуске');
+      }
     }
+  } else {
+    log('models-tts', 100, 'Модели F5-TTS уже загружены');
   }
 }
 
 module.exports = {
   checkDependencies,
+  checkModels,
   installAll,
-  ensureModelsDownloaded,
+  downloadModels,
   detectNvidiaGpu,
   getBaseDir,
   getPythonDir,

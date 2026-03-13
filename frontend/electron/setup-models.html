@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AI Dubbing Studio — Установка</title>
+  <title>AI Dubbing Studio — Загрузка моделей</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -18,28 +18,26 @@
       -webkit-app-region: drag;
     }
     .container {
-      width: 520px;
-      padding: 40px;
+      width: 460px;
+      padding: 36px;
       -webkit-app-region: no-drag;
     }
     h1 {
-      font-size: 20px;
+      font-size: 18px;
       font-weight: 600;
       color: #FFFFFF;
-      margin-bottom: 8px;
+      margin-bottom: 6px;
     }
     .subtitle {
       font-size: 13px;
       color: #888;
-      margin-bottom: 32px;
+      margin-bottom: 28px;
     }
-
-    /* Этапы */
     .steps {
       display: flex;
       flex-direction: column;
-      gap: 16px;
-      margin-bottom: 28px;
+      gap: 14px;
+      margin-bottom: 24px;
     }
     .step {
       display: flex;
@@ -69,8 +67,6 @@
     .step.active .step-label { color: #FFF; }
     .step.done   .step-label { color: #66BB6A; }
     .step.error  .step-label { color: #EF5350; }
-
-    /* Прогресс-бар */
     .progress-bar-wrap {
       width: 100%;
       height: 6px;
@@ -86,8 +82,6 @@
       border-radius: 3px;
       transition: width 0.3s ease;
     }
-
-    /* Лог */
     .log {
       font-size: 12px;
       color: #777;
@@ -95,15 +89,13 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      margin-bottom: 24px;
+      margin-bottom: 20px;
     }
-
-    /* Кнопки */
     .actions {
       display: flex;
       justify-content: flex-end;
     }
-    .btn-cancel {
+    .btn-skip {
       padding: 8px 20px;
       border: 1px solid #555;
       border-radius: 6px;
@@ -113,20 +105,18 @@
       cursor: pointer;
       transition: all 0.2s;
     }
-    .btn-cancel:hover { border-color: #888; color: #FFF; }
-
-    /* Ошибка */
+    .btn-skip:hover { border-color: #888; color: #FFF; }
     .error-box {
       display: none;
       background: rgba(239,83,80,0.1);
       border: 1px solid rgba(239,83,80,0.3);
       border-radius: 8px;
       padding: 16px;
-      margin-bottom: 20px;
+      margin-bottom: 16px;
       font-size: 13px;
       color: #EF9A9A;
       word-break: break-word;
-      max-height: 120px;
+      max-height: 80px;
       overflow-y: auto;
     }
     .error-box.visible { display: block; }
@@ -134,37 +124,17 @@
 </head>
 <body>
   <div class="container">
-    <h1>Первый запуск — установка компонентов</h1>
-    <p class="subtitle">Приложению нужно скачать и установить необходимые компоненты. Это делается один раз.</p>
+    <h1>Загрузка AI-моделей</h1>
+    <p class="subtitle">Необходимо скачать модели для работы. Это делается один раз.</p>
 
     <div class="steps">
-      <div class="step" id="step-vcredist">
-        <div class="step-icon">1</div>
-        <div class="step-label">Visual C++ Redistributable</div>
-      </div>
-      <div class="step" id="step-python">
-        <div class="step-icon">2</div>
-        <div class="step-label">Python 3.10</div>
-      </div>
-      <div class="step" id="step-pip">
-        <div class="step-icon">3</div>
-        <div class="step-label">Менеджер пакетов (pip)</div>
-      </div>
-      <div class="step" id="step-packages">
-        <div class="step-icon">4</div>
-        <div class="step-label">ML-библиотеки (PyTorch, WhisperX, TTS...)</div>
-      </div>
-      <div class="step" id="step-ffmpeg">
-        <div class="step-icon">5</div>
-        <div class="step-label">FFmpeg (обработка видео)</div>
-      </div>
       <div class="step" id="step-models-whisper">
-        <div class="step-icon">6</div>
-        <div class="step-label">Модель Whisper (~3 ГБ)</div>
+        <div class="step-icon">1</div>
+        <div class="step-label">Whisper large-v3 — распознавание речи (~3 ГБ)</div>
       </div>
       <div class="step" id="step-models-tts">
-        <div class="step-icon">7</div>
-        <div class="step-label">Модели F5-TTS (~4 ГБ)</div>
+        <div class="step-icon">2</div>
+        <div class="step-label">F5-TTS — синтез речи (~4 ГБ)</div>
       </div>
     </div>
 
@@ -177,13 +147,13 @@
     <div class="error-box" id="errorBox"></div>
 
     <div class="actions">
-      <button class="btn-cancel" id="btnCancel" onclick="window.setupAPI.cancel()">Отмена</button>
+      <button class="btn-skip" id="btnSkip" onclick="window.setupAPI.cancel()">Пропустить</button>
     </div>
   </div>
 
   <script>
-    const STEPS = ['vcredist', 'python', 'pip', 'packages', 'ffmpeg', 'models-whisper', 'models-tts'];
-    const stepWeights = { vcredist: 2, python: 3, pip: 2, packages: 50, ffmpeg: 5, 'models-whisper': 18, 'models-tts': 20 };
+    const STEPS = ['models-whisper', 'models-tts'];
+    const stepWeights = { 'models-whisper': 40, 'models-tts': 60 };
     const stepPercents = {};
     STEPS.forEach(s => { stepPercents[s] = 0; });
 
@@ -207,22 +177,22 @@
     let currentStep = null;
 
     window.setupAPI.onProgress((step, percent, message) => {
-      // Обновляем текущий этап
       if (step !== currentStep) {
-        if (currentStep) setStepState(currentStep, 'done');
+        if (currentStep && stepPercents[currentStep] >= 100) setStepState(currentStep, 'done');
         currentStep = step;
-        setStepState(step, 'active');
+        if (percent < 100) setStepState(step, 'active');
       }
       stepPercents[step] = percent;
+      if (percent >= 100) setStepState(step, 'done');
       updateOverallProgress();
       document.getElementById('logLine').textContent = message || '';
     });
 
     window.setupAPI.onComplete(() => {
-      if (currentStep) setStepState(currentStep, 'done');
+      STEPS.forEach(s => setStepState(s, 'done'));
       document.getElementById('progressBar').style.width = '100%';
-      document.getElementById('logLine').textContent = 'Установка завершена! Запуск приложения...';
-      document.getElementById('btnCancel').style.display = 'none';
+      document.getElementById('logLine').textContent = 'Модели загружены! Запуск приложения...';
+      document.getElementById('btnSkip').style.display = 'none';
     });
 
     window.setupAPI.onError((errorMessage) => {
@@ -230,7 +200,8 @@
       const errorBox = document.getElementById('errorBox');
       errorBox.textContent = errorMessage;
       errorBox.classList.add('visible');
-      document.getElementById('logLine').textContent = 'Ошибка установки. Закройте и попробуйте снова.';
+      document.getElementById('logLine').textContent = 'Ошибка загрузки. Модели скачаются при первом использовании.';
+      document.getElementById('btnSkip').textContent = 'Закрыть';
     });
   </script>
 </body>

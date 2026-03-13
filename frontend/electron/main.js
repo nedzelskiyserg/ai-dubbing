@@ -805,6 +805,68 @@ function runSetupWindow() {
   });
 }
 
+/** Показывает окно загрузки моделей. Возвращает Promise<void> по завершении. */
+function runModelsDownloadWindow(modelsStatus) {
+  return new Promise((resolve) => {
+    const modelsWindow = new BrowserWindow({
+      width: 520,
+      height: 340,
+      resizable: false,
+      frame: false,
+      backgroundColor: '#1A1A1A',
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        preload: path.join(__dirname, 'preload-setup.js'),
+      },
+      icon: process.platform === 'win32' ? path.join(__dirname, '../build/icon.ico') : undefined,
+    });
+
+    modelsWindow.loadFile(path.join(__dirname, 'setup-models.html'));
+
+    ipcMain.once('setup-cancel', () => {
+      logDiag('Загрузка моделей пропущена пользователем');
+      if (modelsWindow && !modelsWindow.isDestroyed()) modelsWindow.close();
+      resolve();
+    });
+
+    modelsWindow.on('closed', () => { resolve(); });
+
+    modelsWindow.once('ready-to-show', () => {
+      modelsWindow.show();
+      modelsWindow.center();
+
+      // Отправляем начальное состояние
+      if (modelsStatus.whisperOk) {
+        modelsWindow.webContents.send('setup-progress', 'models-whisper', 100, 'Модель Whisper уже загружена');
+      }
+      if (modelsStatus.ttsOk) {
+        modelsWindow.webContents.send('setup-progress', 'models-tts', 100, 'Модели F5-TTS уже загружены');
+      }
+
+      depManager.downloadModels((step, pct, msg) => {
+        if (modelsWindow && !modelsWindow.isDestroyed()) {
+          modelsWindow.webContents.send('setup-progress', step, pct, msg);
+        }
+        logDiag(`models [${step}] ${pct}%`, { message: msg });
+      }).then(() => {
+        logDiag('Загрузка моделей завершена');
+        if (modelsWindow && !modelsWindow.isDestroyed()) {
+          modelsWindow.webContents.send('setup-complete');
+          setTimeout(() => {
+            if (modelsWindow && !modelsWindow.isDestroyed()) modelsWindow.close();
+          }, 1500);
+        }
+      }).catch((err) => {
+        logDiag('Ошибка загрузки моделей', { error: err.message });
+        if (modelsWindow && !modelsWindow.isDestroyed()) {
+          modelsWindow.webContents.send('setup-error', err.message);
+        }
+      });
+    });
+  });
+}
+
 // --- Запуск API сервера и ожидание готовности ---
 
 async function launchBackend() {
@@ -926,13 +988,17 @@ app.whenReady().then(async () => {
     logDiag('Auto-update check failed (non-critical)', { error: err.message });
   }
 
-  // Проверяем и докачиваем модели (Whisper + F5-TTS) если не скачаны
-  try {
-    await depManager.ensureModelsDownloaded((step, pct, msg) => {
-      logDiag(`[${step}] ${pct}%`, { message: msg });
-    });
-  } catch (err) {
-    logDiag('Model preload failed (non-critical)', { error: err.message });
+  // Проверяем наличие моделей (Whisper + F5-TTS)
+  const modelsStatus = depManager.checkModels();
+  logDiag('Состояние моделей', modelsStatus);
+
+  if (!modelsStatus.allOk) {
+    logDiag('Модели не загружены — показываем окно загрузки');
+    try {
+      await runModelsDownloadWindow(modelsStatus);
+    } catch (err) {
+      logDiag('Model download window error (non-critical)', { error: err.message });
+    }
   }
 
   // Запускаем backend
