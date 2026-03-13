@@ -632,9 +632,67 @@ function formatBytes(bytes) {
   return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
 }
 
+/**
+ * Проверяет наличие предзагруженных моделей и скачивает недостающие.
+ * Вызывается при каждом запуске (после installAll и auto-update).
+ * Не блокирует запуск при ошибке — модели скачаются при первом использовании.
+ *
+ * @param {function} onProgress — (step, percent, message) callback
+ */
+async function ensureModelsDownloaded(onProgress) {
+  const log = (pct, msg) => {
+    if (onProgress) onProgress('models', pct, msg);
+  };
+
+  const pythonExe = getPythonExe();
+  if (!fs.existsSync(pythonExe)) return;
+
+  const srcPath = getSrcPath();
+  if (!srcPath) return;
+
+  // Whisper
+  const downloadModelsScript = path.join(srcPath, 'download_models.py');
+  if (fs.existsSync(downloadModelsScript)) {
+    try {
+      log(0, 'Проверка модели Whisper...');
+      await runProcess(pythonExe, [downloadModelsScript], {
+        cwd: srcPath,
+        env: getPythonEnv(),
+        timeout: 600000,
+      }, (line) => {
+        const trimmed = line.trim();
+        if (trimmed) log(25, trimmed);
+      });
+      log(50, 'Модель Whisper OK');
+    } catch (err) {
+      log(50, 'Whisper: ' + (err.message || 'ошибка загрузки, скачается при первом запуске'));
+    }
+  }
+
+  // F5-TTS
+  const downloadTtsScript = path.join(srcPath, 'download_tts_model.py');
+  if (fs.existsSync(downloadTtsScript)) {
+    try {
+      log(50, 'Проверка моделей F5-TTS...');
+      await runProcess(pythonExe, [downloadTtsScript], {
+        cwd: srcPath,
+        env: getPythonEnv(),
+        timeout: 1800000,
+      }, (line) => {
+        const trimmed = line.trim();
+        if (trimmed) log(75, trimmed);
+      });
+      log(100, 'Модели F5-TTS OK');
+    } catch (err) {
+      log(100, 'F5-TTS: ' + (err.message || 'ошибка загрузки, скачается при первом запуске'));
+    }
+  }
+}
+
 module.exports = {
   checkDependencies,
   installAll,
+  ensureModelsDownloaded,
   detectNvidiaGpu,
   getBaseDir,
   getPythonDir,

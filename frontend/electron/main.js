@@ -926,6 +926,15 @@ app.whenReady().then(async () => {
     logDiag('Auto-update check failed (non-critical)', { error: err.message });
   }
 
+  // Проверяем и докачиваем модели (Whisper + F5-TTS) если не скачаны
+  try {
+    await depManager.ensureModelsDownloaded((step, pct, msg) => {
+      logDiag(`[${step}] ${pct}%`, { message: msg });
+    });
+  } catch (err) {
+    logDiag('Model preload failed (non-critical)', { error: err.message });
+  }
+
   // Запускаем backend
   await launchBackend();
 
