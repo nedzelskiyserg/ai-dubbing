@@ -124,9 +124,11 @@ jobs:
     # 8. Собираем Electron приложение (+ публикуем Release при теге v*)
     - name: Build Electron app
       working-directory: ./frontend
+      shell: pwsh
       run: |
-        Write-Host "🔨 Сборка Electron приложения..."
-        npx electron-builder --win
+        $publish = if ("${{ github.ref }}".StartsWith("refs/tags/v")) { "always" } else { "never" }
+        Write-Host "🔨 Сборка Electron приложения (publish=$publish)..."
+        npx electron-builder --win --publish $publish
       env:
         ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder-cache
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
