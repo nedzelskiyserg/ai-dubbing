@@ -74,7 +74,7 @@ jobs:
         }
         
             # Добавляем остальные параметры
-            $cmd += " --collect-all nicegui --collect-all faster_whisper --collect-all pyannote src/main.py"
+            $cmd += " --collect-all nicegui --collect-all faster_whisper --collect-all pyannote --collect-all f5_tts --collect-all ruaccent src/main.py"
         
         # Выполняем команду
         Invoke-Expression $cmd

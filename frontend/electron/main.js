@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, clipboard, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, clipboard, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -935,16 +935,29 @@ app.whenReady().then(async () => {
   if (app.isPackaged) {
     try {
       const { autoUpdater: electronUpdater } = require('electron-updater');
-      electronUpdater.autoDownload = false;
+      electronUpdater.autoDownload = true;
+      electronUpdater.autoInstallOnAppQuit = true;
       electronUpdater.logger = { info: (m) => logDiag('electron-updater', { info: m }), warn: (m) => logDiag('electron-updater', { warn: m }), error: (m) => logDiag('electron-updater', { error: m }) };
 
       electronUpdater.on('update-available', (info) => {
-        logDiag('Доступно обновление Electron', { version: info.version });
-        if (mainWindow) mainWindow.webContents.send('electron-update-available', info.version);
+        logDiag('Доступно обновление приложения', { version: info.version });
       });
+
       electronUpdater.on('update-downloaded', (info) => {
-        logDiag('Обновление Electron скачано', { version: info.version });
-        if (mainWindow) mainWindow.webContents.send('electron-update-downloaded', info.version);
+        logDiag('Обновление приложения скачано', { version: info.version });
+        // Нативный диалог — не зависит от React UI
+        dialog.showMessageBox(mainWindow, {
+          type: 'info',
+          title: 'Обновление готово',
+          message: `Доступна новая версия ${info.version}.\nОбновление уже скачано. Перезапустить приложение для установки?`,
+          buttons: ['Перезапустить', 'Позже'],
+          defaultId: 0,
+          cancelId: 1,
+        }).then(({ response }) => {
+          if (response === 0) {
+            electronUpdater.quitAndInstall(false, true);
+          }
+        });
       });
 
       electronUpdater.checkForUpdates().catch(err => {
