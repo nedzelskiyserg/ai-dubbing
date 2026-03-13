@@ -989,6 +989,15 @@ app.whenReady().then(async () => {
     logDiag('Auto-update check failed (non-critical)', { error: err.message });
   }
 
+  // Проверяем и доустанавливаем Python-зависимости (если requirements.txt изменился)
+  try {
+    await depManager.ensureRequirements((step, pct, msg) => {
+      logDiag(`[${step}] ${pct}%`, { message: msg });
+    });
+  } catch (err) {
+    logDiag('ensureRequirements failed (non-critical)', { error: err.message });
+  }
+
   // Проверяем наличие моделей (Whisper + F5-TTS)
   const modelsStatus = depManager.checkModels();
   logDiag('Состояние моделей', modelsStatus);

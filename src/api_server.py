@@ -35,6 +35,42 @@ def _fix_ssl_globally():
 
 _fix_ssl_globally()
 
+# --- Автоустановка недостающих зависимостей из requirements.txt ---
+def _ensure_requirements():
+    """Проверяет хеш requirements.txt и запускает pip install если изменился."""
+    try:
+        import hashlib
+        src_dir = Path(__file__).resolve().parent
+        req_file = src_dir.parent / 'requirements.txt'
+        if not req_file.exists():
+            req_file = src_dir / 'requirements.txt'
+        if not req_file.exists():
+            return
+        req_hash = hashlib.md5(req_file.read_bytes()).hexdigest()
+        # Хеш-файл рядом с python.exe (в embedded) или в src
+        hash_file = Path(sys.executable).parent / '.requirements-hash'
+        saved_hash = ''
+        if hash_file.exists():
+            saved_hash = hash_file.read_text().strip()
+        if req_hash == saved_hash:
+            return
+        print(f"[api_server] requirements.txt изменился, запуск pip install...", flush=True)
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, '-m', 'pip', 'install', '-r', str(req_file),
+             '--no-cache-dir', '--no-warn-script-location'],
+            capture_output=True, text=True, timeout=600
+        )
+        if result.returncode == 0:
+            hash_file.write_text(req_hash)
+            print(f"[api_server] pip install завершён успешно", flush=True)
+        else:
+            print(f"[api_server] pip install ошибка: {result.stderr[-500:]}", flush=True)
+    except Exception as e:
+        print(f"[api_server] _ensure_requirements ошибка: {e}", flush=True)
+
+_ensure_requirements()
+
 try:
     from flask import Flask, request, jsonify, send_file
     from flask_cors import CORS

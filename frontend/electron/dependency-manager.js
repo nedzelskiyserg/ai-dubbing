@@ -700,11 +700,87 @@ async function downloadModels(onProgress) {
   }
 }
 
+/**
+ * Проверяет что все пакеты из requirements.txt установлены.
+ * Хранит хеш requirements.txt — если файл изменился, запускает pip install.
+ * Быстрая проверка (сравнение хешей), не запускает Python без необходимости.
+ */
+async function ensureRequirements(onProgress) {
+  const log = (pct, msg) => {
+    if (onProgress) onProgress('packages', pct, msg);
+  };
+
+  const pythonExe = getPythonExe();
+  const reqPath = getRequirementsPath();
+  if (!pythonExe || !fs.existsSync(pythonExe) || !reqPath || !fs.existsSync(reqPath)) return;
+
+  // Сравниваем хеш requirements.txt с сохранённым
+  const crypto = require('crypto');
+  const reqContent = fs.readFileSync(reqPath, 'utf8');
+  const reqHash = crypto.createHash('md5').update(reqContent).digest('hex');
+  const hashFile = path.join(getBaseDir(), '.requirements-hash');
+
+  let savedHash = '';
+  try { savedHash = fs.readFileSync(hashFile, 'utf8').trim(); } catch (e) { /* нет файла */ }
+
+  if (reqHash === savedHash) return; // requirements.txt не изменился
+
+  log(0, 'Обновление Python-зависимостей...');
+
+  try {
+    await runProcess(pythonExe, [
+      '-m', 'pip', 'install',
+      '-r', reqPath,
+      '--no-cache-dir',
+      '--no-warn-script-location',
+    ], {
+      cwd: getPythonDir(),
+      env: { ...process.env, PYTHONUTF8: '1' },
+      timeout: 600000,
+    }, (line) => {
+      const trimmed = line.trim();
+      if (trimmed) log(50, trimmed);
+    });
+
+    // Восстанавливаем PyTorch CUDA если нужно
+    const torchVariantFile = path.join(getBaseDir(), '.torch-variant');
+    if (fs.existsSync(torchVariantFile)) {
+      const variant = fs.readFileSync(torchVariantFile, 'utf8').trim();
+      if (variant === 'cu124') {
+        log(80, 'Восстановление PyTorch CUDA...');
+        await runProcess(pythonExe, [
+          '-m', 'pip', 'install',
+          'torch', 'torchaudio',
+          '--index-url', 'https://download.pytorch.org/whl/cu124',
+          '--force-reinstall',
+          '--no-deps',
+          '--no-cache-dir',
+          '--no-warn-script-location',
+        ], {
+          cwd: getPythonDir(),
+          env: { ...process.env, PYTHONUTF8: '1' },
+          timeout: 900000,
+        }, (line) => {
+          const trimmed = line.trim();
+          if (trimmed) log(90, trimmed);
+        });
+      }
+    }
+
+    // Сохраняем хеш после успешной установки
+    fs.writeFileSync(hashFile, reqHash, 'utf8');
+    log(100, 'Python-зависимости обновлены');
+  } catch (err) {
+    log(100, 'Ошибка обновления зависимостей: ' + (err.message || ''));
+  }
+}
+
 module.exports = {
   checkDependencies,
   checkModels,
   installAll,
   downloadModels,
+  ensureRequirements,
   detectNvidiaGpu,
   getBaseDir,
   getPythonDir,
