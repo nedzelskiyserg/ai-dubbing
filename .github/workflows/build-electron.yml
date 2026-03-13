@@ -6,6 +6,9 @@ on:
     tags: [ "v*" ]  # Тег v1.0.1 и т.д. → создаёт GitHub Release для auto-update
   workflow_dispatch:
 
+permissions:
+  contents: write  # Нужно для создания GitHub Releases
+
 jobs:
   build:
     runs-on: windows-latest
