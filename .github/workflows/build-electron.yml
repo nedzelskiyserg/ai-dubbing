@@ -2,8 +2,7 @@ name: Build Electron App (AI Dubbing Studio)
 
 on:
   push:
-    branches: [ "main" ]
-    tags: [ "v*" ]  # Тег v1.0.1 и т.д. → создаёт GitHub Release для auto-update
+    tags: [ "v*" ]  # Тег v1.0.1 и т.д. → собирает и публикует GitHub Release
   workflow_dispatch:
 
 permissions:
