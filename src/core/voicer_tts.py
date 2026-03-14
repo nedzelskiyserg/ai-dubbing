@@ -10,6 +10,8 @@ Voicer API TTS — озвучка через https://voiceapi.csv666.ru
 import os
 import time
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import tempfile
 from pathlib import Path
 from typing import List, Dict, Optional, Callable
@@ -17,6 +19,22 @@ from typing import List, Dict, Optional, Callable
 from core.config import APP_PATHS
 
 VOICER_BASE_URL = "https://voiceapi.csv666.ru"
+
+
+def _create_session() -> requests.Session:
+    """Создаёт requests Session с retry-логикой и экспоненциальным backoff."""
+    session = requests.Session()
+    retry = Retry(
+        total=5,
+        backoff_factor=1.0,       # 1s, 2s, 4s, 8s, 16s
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET", "POST"],
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
 # Интервал опроса статуса задачи (секунды)
 POLL_INTERVAL = 1.0
@@ -58,6 +76,8 @@ class VoicerTTS:
         self.temp_tts_dir.mkdir(parents=True, exist_ok=True)
         # Кэш: speaker -> template_uuid
         self._speaker_voice_map: Dict[str, str] = {}
+        # HTTP session с retry-логикой
+        self._session = _create_session()
 
     def _log(self, msg: str):
         if self.progress_callback:
@@ -71,7 +91,7 @@ class VoicerTTS:
     def validate_key(self) -> bool:
         """Проверяет валидность API ключа через GET /balance."""
         try:
-            resp = requests.get(
+            resp = self._session.get(
                 f"{VOICER_BASE_URL}/balance",
                 headers=self._headers(),
                 timeout=10,
@@ -83,7 +103,7 @@ class VoicerTTS:
     def get_balance(self) -> Optional[dict]:
         """Возвращает баланс аккаунта."""
         try:
-            resp = requests.get(
+            resp = self._session.get(
                 f"{VOICER_BASE_URL}/balance",
                 headers=self._headers(),
                 timeout=10,
@@ -97,7 +117,7 @@ class VoicerTTS:
     def get_templates(self) -> List[dict]:
         """Получает список сохранённых голосовых шаблонов."""
         try:
-            resp = requests.get(
+            resp = self._session.get(
                 f"{VOICER_BASE_URL}/templates",
                 headers=self._headers(),
                 timeout=10,
@@ -181,7 +201,7 @@ class VoicerTTS:
             self._log("   No voice template specified for this segment!")
             return None
 
-        resp = requests.post(
+        resp = self._session.post(
             f"{VOICER_BASE_URL}/tasks",
             headers=self._headers(),
             json=payload,
@@ -208,7 +228,7 @@ class VoicerTTS:
                 raise InterruptedError("Processing stopped by user")
 
             try:
-                resp = requests.get(
+                resp = self._session.get(
                     f"{VOICER_BASE_URL}/tasks/{task_id}/status",
                     headers=self._headers(),
                     timeout=10,
@@ -232,7 +252,7 @@ class VoicerTTS:
     def _download_result(self, task_id: str, output_path: str) -> bool:
         """Скачивает результат задачи (MP3) и сохраняет."""
         try:
-            resp = requests.get(
+            resp = self._session.get(
                 f"{VOICER_BASE_URL}/tasks/{task_id}/result",
                 headers=self._headers(),
                 timeout=60,
