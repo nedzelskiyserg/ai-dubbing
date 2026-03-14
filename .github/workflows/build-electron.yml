@@ -123,19 +123,23 @@ jobs:
           Write-Host "⚠️ .env не найден, пропускаем"
         }
 
-    # 8. Собираем Electron приложение и публикуем Release при теге v*
+    # 8. Собираем Electron приложение
     - name: Build Electron app
+      if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
       working-directory: ./frontend
-      shell: pwsh
-      run: |
-        Write-Host "Publish mode: $env:EP_PUBLISH (ref: $env:EP_GIT_REF)"
-        npx electron-builder --win --publish $env:EP_PUBLISH
+      run: npx electron-builder --win --publish never
       env:
-        EP_PUBLISH: ${{ startsWith(github.ref, 'refs/tags/v') && 'always' || 'never' }}
-        EP_GIT_REF: ${{ github.ref }}
         ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder-cache
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        CI: false
+
+    # 8. Собираем Electron приложение + публикуем Release (только для тегов v*)
+    - name: Build and publish Electron app
+      if: startsWith(github.ref, 'refs/tags/v')
+      working-directory: ./frontend
+      run: npx electron-builder --win --publish always
+      env:
+        ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder-cache
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     # 9. Проверяем созданные файлы
     - name: Verify build output
