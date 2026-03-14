@@ -92,7 +92,8 @@
     "publish": {
       "provider": "github",
       "owner": "nedzelskiyserg",
-      "repo": "ai-dubbing"
+      "repo": "ai-dubbing",
+      "releaseType": "release"
     }
   },
   "eslintConfig": {
