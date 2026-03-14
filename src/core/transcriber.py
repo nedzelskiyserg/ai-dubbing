@@ -654,34 +654,75 @@ class Transcriber:
             
             # --- ШАГ 3: ДИАРИЗАЦИЯ ---
             self._log(f"\n👥 Шаг 3/4: Диаризация (PyAnnote)...")
-            
+
             diarize_segments = None
             if self.hf_token:
                 from whisperx import diarize
-                
+
+                # Определяем длительность аудио для адаптивных параметров
+                audio_duration = 0.0
+                if result.get("segments"):
+                    audio_duration = max(
+                        float(s.get("end", 0)) for s in result["segments"]
+                    )
+                self._log(f"📏 Длительность аудио: {audio_duration:.1f}s")
+
+                # Адаптивные ограничения на количество спикеров
+                # Для коротких роликов PyAnnote склонна к over-clustering —
+                # ограничиваем max_speakers, чтобы не дробить одного человека на несколько
+                effective_min = min_speakers
+                effective_max = max_speakers
+                effective_num = num_speakers
+
+                if effective_num is None and effective_min is None and effective_max is None:
+                    # AUTO режим — ставим разумные ограничения по длительности
+                    if audio_duration <= 30:
+                        effective_min = 1
+                        effective_max = 2
+                        self._log(f"⚡ Короткое аудио (≤30s): ограничение 1–2 спикера")
+                    elif audio_duration <= 60:
+                        effective_min = 1
+                        effective_max = 3
+                        self._log(f"⚡ Короткое аудио (≤60s): ограничение 1–3 спикера")
+                    elif audio_duration <= 180:
+                        effective_min = 1
+                        effective_max = 4
+                        self._log(f"⚡ Среднее аудио (≤3min): ограничение 1–4 спикера")
+                    else:
+                        effective_min = 1
+                        effective_max = 6
+                        self._log(f"⚡ Длинное аудио (>{audio_duration/60:.0f}min): ограничение 1–6 спикеров")
+
                 # Загружаем пайплайн диаризации
                 diarize_model = diarize.DiarizationPipeline(
                     use_auth_token=self.hf_token,
                     device=self.device
                 )
-                
+
                 diarize_segments = diarize_model(
                     resolved_path,
-                    min_speakers=min_speakers,
-                    max_speakers=max_speakers,
-                    num_speakers=num_speakers
+                    min_speakers=effective_min,
+                    max_speakers=effective_max,
+                    num_speakers=effective_num
                 )
-                
+
                 del diarize_model
                 self._cleanup_memory()
-                
+
                 # --- ШАГ 4: СБОРКА И УМНАЯ НАРЕЗКА ---
                 self._log(f"\n🔗 Шаг 4/4: Сборка и разбиение на предложения...")
-                
+
                 # Присваиваем спикеров словам
                 result = diarize.assign_word_speakers(
                     diarize_segments,
                     result
+                )
+
+                # Пост-обработка: консолидация спикеров
+                # PyAnnote может присвоить разные метки одному и тому же голосу
+                # (over-clustering). Анализируем статистику и объединяем подозрительных.
+                result["segments"] = self._consolidate_speakers(
+                    result["segments"], audio_duration
                 )
             else:
                 self._log("⚠️ HF Token не найден. Диаризация пропущена (будет только текст).")
@@ -964,6 +1005,137 @@ class Transcriber:
                 for seg in group
             ]
         }
+
+    def _consolidate_speakers(self, segments: List[Dict], audio_duration: float) -> List[Dict]:
+        """
+        Пост-обработка диаризации: объединение over-clustered спикеров.
+
+        PyAnnote может разбить один голос на несколько кластеров, особенно
+        в коротких аудио. Анализируем паттерны и объединяем подозрительных:
+
+        1. Спикер-эфемер: если спикер появляется ≤2 раз и его общее время
+           < 10% от аудио — скорее всего это тот же человек, что и соседний спикер.
+        2. Чередование без логики: если два спикера постоянно чередуются
+           без пауз (gap < 0.3s), это скорее всего один человек.
+        3. Одиночный спикер: если один спикер занимает >85% времени,
+           а остальные — мелкие фрагменты, объединяем их в основного.
+        """
+        if not segments or audio_duration <= 0:
+            return segments
+
+        # Собираем статистику по спикерам
+        speaker_stats = {}  # speaker -> {count, total_time, segments_indices}
+        for i, seg in enumerate(segments):
+            spk = seg.get("speaker", "SPEAKER_UNKNOWN")
+            if spk not in speaker_stats:
+                speaker_stats[spk] = {"count": 0, "total_time": 0.0, "indices": []}
+            dur = float(seg.get("end", 0)) - float(seg.get("start", 0))
+            speaker_stats[spk]["count"] += 1
+            speaker_stats[spk]["total_time"] += max(dur, 0)
+            speaker_stats[spk]["indices"].append(i)
+
+        unique_speakers = [s for s in speaker_stats if s != "SPEAKER_UNKNOWN"]
+
+        if len(unique_speakers) <= 1:
+            return segments  # Один или ноль спикеров — нечего консолидировать
+
+        self._log(f"🔍 Анализ спикеров ({len(unique_speakers)} обнаружено):")
+        for spk in sorted(unique_speakers):
+            st = speaker_stats[spk]
+            pct = (st["total_time"] / audio_duration * 100) if audio_duration > 0 else 0
+            self._log(f"   {spk}: {st['count']} сегм., {st['total_time']:.1f}s ({pct:.0f}%)")
+
+        # Находим доминирующего спикера (наибольшее суммарное время)
+        dominant = max(unique_speakers, key=lambda s: speaker_stats[s]["total_time"])
+        dominant_pct = speaker_stats[dominant]["total_time"] / audio_duration * 100
+
+        merge_map = {}  # speaker_to_replace -> replacement_speaker
+
+        # Правило 1: Если доминирующий спикер >85% времени — все мелкие (≤2 сегмента)
+        # скорее всего его же голос, неверно кластеризованный
+        if dominant_pct > 85:
+            for spk in unique_speakers:
+                if spk == dominant:
+                    continue
+                st = speaker_stats[spk]
+                spk_pct = st["total_time"] / audio_duration * 100
+                if st["count"] <= 2 and spk_pct < 10:
+                    merge_map[spk] = dominant
+                    self._log(f"   🔗 {spk} → {dominant} (эфемер при доминировании {dominant_pct:.0f}%)")
+
+        # Правило 2: Спикер-эфемер — появляется 1 раз с очень коротким временем
+        # Объединяем с ближайшим соседним спикером
+        for spk in unique_speakers:
+            if spk in merge_map or spk == dominant:
+                continue
+            st = speaker_stats[spk]
+            spk_pct = st["total_time"] / audio_duration * 100
+            if st["count"] == 1 and spk_pct < 5:
+                # Находим ближайшего соседа
+                seg_idx = st["indices"][0]
+                neighbor = None
+                if seg_idx > 0:
+                    neighbor = segments[seg_idx - 1].get("speaker")
+                if not neighbor or neighbor == "SPEAKER_UNKNOWN":
+                    if seg_idx < len(segments) - 1:
+                        neighbor = segments[seg_idx + 1].get("speaker")
+                if neighbor and neighbor != "SPEAKER_UNKNOWN" and neighbor != spk:
+                    merge_map[spk] = neighbor
+                    self._log(f"   🔗 {spk} → {neighbor} (одиночный эфемер {spk_pct:.1f}%)")
+
+        # Правило 3: Быстрое чередование без пауз — два спикера постоянно
+        # сменяют друг друга с gap < 0.3s, при этом один из них слабый (<15%)
+        if len(unique_speakers) >= 2 and not merge_map:
+            for spk in unique_speakers:
+                if spk == dominant:
+                    continue
+                st = speaker_stats[spk]
+                spk_pct = st["total_time"] / audio_duration * 100
+                if spk_pct >= 15:
+                    continue  # Достаточно существенный спикер, не трогаем
+
+                # Проверяем: все ли сегменты этого спикера соседствуют с dominant
+                # с маленьким gap (признак неверного кластера)
+                rapid_switch_count = 0
+                for idx in st["indices"]:
+                    for neighbor_idx in [idx - 1, idx + 1]:
+                        if 0 <= neighbor_idx < len(segments):
+                            neighbor_spk = segments[neighbor_idx].get("speaker")
+                            if neighbor_spk == dominant:
+                                gap = abs(
+                                    float(segments[min(idx, neighbor_idx)].get("end", 0)) -
+                                    float(segments[max(idx, neighbor_idx)].get("start", 0))
+                                )
+                                if gap < 0.3:
+                                    rapid_switch_count += 1
+
+                # Если >50% переходов — быстрое чередование, значит это один голос
+                if rapid_switch_count > st["count"] * 0.5 and st["count"] >= 2:
+                    merge_map[spk] = dominant
+                    self._log(f"   🔗 {spk} → {dominant} (быстрое чередование, {rapid_switch_count} rapid switches)")
+
+        # Применяем объединения
+        if merge_map:
+            consolidated = []
+            for seg in segments:
+                seg_copy = seg.copy()
+                spk = seg_copy.get("speaker", "SPEAKER_UNKNOWN")
+                if spk in merge_map:
+                    seg_copy["speaker"] = merge_map[spk]
+                consolidated.append(seg_copy)
+
+                # Обновляем слова тоже
+                if "words" in seg_copy:
+                    for word in seg_copy["words"]:
+                        if isinstance(word, dict) and word.get("speaker") in merge_map:
+                            word["speaker"] = merge_map[word["speaker"]]
+
+            final_speakers = set(s.get("speaker") for s in consolidated if s.get("speaker") != "SPEAKER_UNKNOWN")
+            self._log(f"✅ Консолидация: {len(unique_speakers)} → {len(final_speakers)} спикеров")
+            return consolidated
+        else:
+            self._log(f"✅ Консолидация не требуется — все спикеры корректны")
+            return segments
 
     def _format_basic(self, segments: List[Dict]) -> List[Dict]:
         """Fallback метод, если нет детальных слов (безопасность: float())"""

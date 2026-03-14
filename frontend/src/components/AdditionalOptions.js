@@ -2,19 +2,27 @@ import React, { useState, useContext, useEffect, useRef } from 'react';
 import './AdditionalOptions.css';
 import { AppContext } from '../AppContext';
 import Dropdown from './Dropdown';
+import PresetsPopup from './PresetsPopup';
 
 const AdditionalOptions = () => {
-  const { options, setOptions, openrouterKeyStatus, validateOpenRouterKey } = useContext(AppContext);
+  const {
+    options, setOptions,
+    openrouterKeyStatus, validateOpenRouterKey,
+    voicerKeyStatus, validateVoicerKey,
+    voicePresets, setVoicePresets,
+  } = useContext(AppContext);
   const [processingExpanded, setProcessingExpanded] = useState(true);
   const [translationExpanded, setTranslationExpanded] = useState(true);
   const [voiceExpanded, setVoiceExpanded] = useState(true);
+  const [showPresetsPopup, setShowPresetsPopup] = useState(false);
   const debounceRef = useRef(null);
+  const voicerDebounceRef = useRef(null);
 
   const updateOption = (key, value) => {
     setOptions(prev => ({ ...prev, [key]: value }));
   };
 
-  // Обработчик изменения API ключа с debounce-валидацией
+  // Обработчик изменения OpenRouter API ключа с debounce-валидацией
   const handleApiKeyChange = (value) => {
     updateOption('openrouterApiKey', value);
 
@@ -30,10 +38,27 @@ const AdditionalOptions = () => {
     }, 600);
   };
 
-  // Очистка таймера при размонтировании
+  // Обработчик изменения Voicer API ключа с debounce-валидацией
+  const handleVoicerKeyChange = (value) => {
+    updateOption('voicerApiKey', value);
+
+    if (voicerDebounceRef.current) clearTimeout(voicerDebounceRef.current);
+
+    if (!value || !value.trim()) {
+      validateVoicerKey('');
+      return;
+    }
+
+    voicerDebounceRef.current = setTimeout(() => {
+      validateVoicerKey(value);
+    }, 600);
+  };
+
+  // Очистка таймеров при размонтировании
   useEffect(() => {
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
+      if (voicerDebounceRef.current) clearTimeout(voicerDebounceRef.current);
     };
   }, []);
 
@@ -126,12 +151,6 @@ const AdditionalOptions = () => {
                   </div>
                   <span className="checkbox-label" onClick={() => updateOption('transcribe', !options.transcribe)}>Transcribe</span>
                 </div>
-                <div className="checkbox-container">
-                  <div className={`checkbox ${options.cloneVoice ? 'checked' : ''}`} onClick={() => updateOption('cloneVoice', !options.cloneVoice)}>
-                    <span className="checkbox-checkmark">✓</span>
-                  </div>
-                  <span className={`checkbox-label ${!options.cloneVoice ? 'unchecked' : ''}`} onClick={() => updateOption('cloneVoice', !options.cloneVoice)}>Clone voice</span>
-                </div>
               </div>
             </div>
           </div>
@@ -209,12 +228,12 @@ const AdditionalOptions = () => {
           <div className="divider"></div>
         </div>
 
-        {/* VOICE CLONING SECTION */}
+        {/* DUBBING SECTION (Voicer API only) */}
         <div className="section">
           <div className="section-header" onClick={() => setVoiceExpanded(!voiceExpanded)}>
             <div className="section-title-group">
               <span className="material-symbols-outlined section-icon voice-icon">record_voice_over</span>
-              <span className="section-title">VOICE CLONING</span>
+              <span className="section-title">DUBBING</span>
             </div>
             <span className={`section-arrow ${voiceExpanded ? 'expanded' : ''}`}>{voiceExpanded ? '▼' : '▶'}</span>
           </div>
@@ -227,23 +246,47 @@ const AdditionalOptions = () => {
                   </div>
                   <span className={`checkbox-label ${!options.voiceEnabled ? 'unchecked' : ''}`} onClick={() => updateOption('voiceEnabled', !options.voiceEnabled)}>Enable dubbing</span>
                 </div>
-                {options.voiceEnabled && (
-                  <div className="checkbox-container">
-                    <div className={`checkbox ${options.usePresetVoices ? 'checked' : ''}`} onClick={() => updateOption('usePresetVoices', !options.usePresetVoices)}>
-                      <span className="checkbox-checkmark">✓</span>
-                    </div>
-                    <span className={`checkbox-label ${!options.usePresetVoices ? 'unchecked' : ''}`} onClick={() => updateOption('usePresetVoices', !options.usePresetVoices)}>Готовые голоса</span>
+                <button
+                  className="manage-presets-btn"
+                  onClick={() => setShowPresetsPopup(true)}
+                >
+                  <span className="material-symbols-outlined">playlist_add</span>
+                  VOICE PRESETS
+                  <span className="presets-count">{voicePresets.length}</span>
+                </button>
+              </div>
+              <div className="options-row api-key-row">
+                <div className="field-group full-width">
+                  <div className="field-label-row">
+                    <div className="field-label">VOICER API KEY</div>
+                    {voicerKeyStatus !== 'idle' && (
+                      <span className={`key-status ${keyStatusClass[voicerKeyStatus]}`}>
+                        {keyStatusLabel[voicerKeyStatus]}
+                      </span>
+                    )}
                   </div>
-                )}
-                <div className="voice-hint">
-                  <span className="hint-label">[!]</span>
-                  <span className="hint-text">Python 3.10+ required</span>
+                  <input
+                    type="password"
+                    className={`api-key-input ${voicerKeyStatus === 'valid' ? 'input-valid' : ''} ${voicerKeyStatus === 'invalid' ? 'input-invalid' : ''}`}
+                    value={options.voicerApiKey || ''}
+                    onChange={(e) => handleVoicerKeyChange(e.target.value)}
+                    placeholder="voicer-api-key..."
+                  />
                 </div>
               </div>
             </div>
           </div>
         </div>
       </div>
+
+      {/* Presets Popup */}
+      {showPresetsPopup && (
+        <PresetsPopup
+          presets={voicePresets}
+          onSave={(updated) => setVoicePresets(updated)}
+          onClose={() => setShowPresetsPopup(false)}
+        />
+      )}
     </div>
   );
 };

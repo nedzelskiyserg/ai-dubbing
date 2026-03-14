@@ -519,53 +519,113 @@ class SpeakerCorrector:
         return merged
     
     def _fix_unknown_speakers(self, segments: List[Dict]) -> List[Dict]:
-        """Исправляет SPEAKER_UNKNOWN, заменяя на ближайшего спикера"""
+        """
+        Исправляет SPEAKER_UNKNOWN, используя контекстный анализ:
+        1. Проверяем грамматическую связность с соседями (запятая → продолжение)
+        2. Анализируем паузу: маленький gap = тот же спикер, большой = возможно другой
+        3. Q&A паттерн: вопрос → ответ = другой спикер
+        4. Fallback: ближайший известный сосед
+        """
         if not segments:
             return segments
-        
+
         fixed = []
         known_speakers = set()
-        
+
         # Собираем всех известных спикеров
         for seg in segments:
             speaker = seg.get('speaker', 'SPEAKER_UNKNOWN')
             if speaker != 'SPEAKER_UNKNOWN':
                 known_speakers.add(speaker)
-        
+
         if not known_speakers:
-            # Если нет известных спикеров, используем SPEAKER_00 по умолчанию
             known_speakers.add('SPEAKER_00')
-        
-        # Исправляем SPEAKER_UNKNOWN
+
         for i, seg in enumerate(segments):
             seg_copy = seg.copy()
             speaker = seg_copy.get('speaker', 'SPEAKER_UNKNOWN')
-            
-            if speaker == 'SPEAKER_UNKNOWN':
-                # Ищем ближайшего спикера (смотрим предыдущий и следующий)
-                replacement = None
-                
-                # Смотрим предыдущий
-                if i > 0:
-                    prev_speaker = segments[i-1].get('speaker', 'SPEAKER_UNKNOWN')
-                    if prev_speaker != 'SPEAKER_UNKNOWN':
-                        replacement = prev_speaker
-                
-                # Если не нашли, смотрим следующий
-                if not replacement and i < len(segments) - 1:
-                    next_speaker = segments[i+1].get('speaker', 'SPEAKER_UNKNOWN')
-                    if next_speaker != 'SPEAKER_UNKNOWN':
-                        replacement = next_speaker
-                
-                # Если все еще не нашли, берем первого известного
-                if not replacement:
-                    replacement = sorted(known_speakers)[0]
-                
-                seg_copy['speaker'] = replacement
-                self._log(f"🔧 Исправлен SPEAKER_UNKNOWN → {replacement}")
-            
+
+            if speaker != 'SPEAKER_UNKNOWN':
+                fixed.append(seg_copy)
+                continue
+
+            replacement = None
+            current_text = seg_copy.get('text', '').strip()
+            current_start = float(seg_copy.get('start', 0))
+
+            # Контекст: предыдущий сегмент
+            prev_speaker = None
+            prev_text = ''
+            prev_end = 0.0
+            if i > 0:
+                prev_speaker = segments[i - 1].get('speaker', 'SPEAKER_UNKNOWN')
+                prev_text = segments[i - 1].get('text', '').strip()
+                prev_end = float(segments[i - 1].get('end', 0))
+                if prev_speaker == 'SPEAKER_UNKNOWN':
+                    prev_speaker = None
+
+            # Контекст: следующий сегмент
+            next_speaker = None
+            if i < len(segments) - 1:
+                next_speaker = segments[i + 1].get('speaker', 'SPEAKER_UNKNOWN')
+                if next_speaker == 'SPEAKER_UNKNOWN':
+                    next_speaker = None
+
+            gap_from_prev = current_start - prev_end if prev_end > 0 else 999.0
+
+            # Правило 1: Грамматическая связность с предыдущим
+            # Предыдущий заканчивается на запятую, текущий начинается с маленькой буквы
+            if prev_speaker and prev_text:
+                if prev_text.endswith(',') and current_text and current_text[0].islower():
+                    replacement = prev_speaker
+
+            # Правило 2: Маленький gap (< 0.5s) без смены контекста = тот же спикер
+            if not replacement and prev_speaker and gap_from_prev < 0.5:
+                # Но проверяем Q&A паттерн: если предыдущий — вопрос, а текущий — ответ
+                is_qa = prev_text.endswith('?') and current_text and (
+                    current_text[0].isdigit() or
+                    current_text.lower().startswith(('yes', 'no', 'да', 'нет', 'конечно', 'exactly'))
+                )
+                if is_qa and next_speaker and next_speaker != prev_speaker:
+                    replacement = next_speaker  # Ответ = другой спикер
+                else:
+                    replacement = prev_speaker
+
+            # Правило 3: Q&A паттерн с большим gap — используем следующего спикера
+            if not replacement and prev_speaker and prev_text.endswith('?'):
+                if next_speaker and next_speaker != prev_speaker:
+                    replacement = next_speaker
+                elif len(known_speakers) > 1:
+                    # Берём другого известного спикера (не предыдущего)
+                    others = sorted(s for s in known_speakers if s != prev_speaker)
+                    if others:
+                        replacement = others[0]
+
+            # Правило 4: Fallback — ближайший известный сосед
+            if not replacement:
+                if prev_speaker:
+                    replacement = prev_speaker
+                elif next_speaker:
+                    replacement = next_speaker
+                else:
+                    # Расширенный поиск: ищем ближайшего известного в радиусе ±5
+                    for offset in range(1, 6):
+                        for j in [i - offset, i + offset]:
+                            if 0 <= j < len(segments):
+                                cand = segments[j].get('speaker', 'SPEAKER_UNKNOWN')
+                                if cand != 'SPEAKER_UNKNOWN':
+                                    replacement = cand
+                                    break
+                        if replacement:
+                            break
+
+            if not replacement:
+                replacement = sorted(known_speakers)[0]
+
+            seg_copy['speaker'] = replacement
+            self._log(f"🔧 Исправлен SPEAKER_UNKNOWN (сегм. {i}) → {replacement}")
             fixed.append(seg_copy)
-        
+
         return fixed
     
     def _fix_overlapping_timestamps(self, segments: List[Dict]) -> List[Dict]:

@@ -93,7 +93,6 @@ try:
     from core.translator import Translator
     from core.smart_translator import SmartTranslator  # Умный перевод с учётом тайминга
     from core.corrector import SpeakerCorrector
-    from core.voice_cloner import VoiceCloner
     from core.video_maker import VideoMaker
     from core.audio_separator import AudioSeparator
     from core.config import APP_PATHS
@@ -510,8 +509,11 @@ def process_youtube_sync(url, quality, options):
             if options.get('voice_cloning', False):
                 processing_state['current_step'] = 'voice_cloning'
                 processing_state['progress'] = 75
-                add_log("🎤 Запуск клонирования голоса...")
-                
+
+                # Создаем callback для проверки остановки
+                def check_should_stop():
+                    return processing_state.get('should_stop', False)
+
                 # Проверяем флаг остановки перед voice cloning
                 if processing_state['should_stop']:
                     add_log("⏹️ Обработка остановлена пользователем")
@@ -519,59 +521,8 @@ def process_youtube_sync(url, quality, options):
                     processing_state['current_step'] = None
                     processing_state['progress'] = 0
                     return
-                
-                # Создаем callback для проверки остановки
-                def check_should_stop():
-                    return processing_state.get('should_stop', False)
-                
-                # Разделение вокала и инструментов (Demucs)
-                instruments_path = None
-                vocals_path = video_path
-                try:
-                    add_log("🎵 Разделение вокала от фоновой музыки (Demucs)...")
-                    separator = AudioSeparator(progress_callback=add_log)
-                    separated = separator.separate(video_path)
-                    vocals_path = separated["vocals"]
-                    instruments_path = separated.get("instruments")
-                    separator.cleanup()
-                except Exception as sep_err:
-                    add_log(f"⚠️ Demucs недоступен: {sep_err}")
-                    add_log("   Продолжаем с оригинальным аудио")
-                    vocals_path = video_path
-                    instruments_path = None
 
-                if processing_state['should_stop']:
-                    add_log("⏹️ Обработка остановлена пользователем")
-                    processing_state['is_processing'] = False
-                    processing_state['current_step'] = None
-                    processing_state['progress'] = 0
-                    return
-
-                cloner = VoiceCloner(
-                    progress_callback=add_log,
-                    should_stop_callback=check_should_stop
-                )
-                use_preset = options.get('use_preset_voices', False)
-                if use_preset:
-                    speaker_samples = cloner.extract_speaker_samples_for_gender(
-                        vocals_path,
-                        segments
-                    )
-                else:
-                    speaker_samples = cloner.extract_speaker_samples(
-                        vocals_path,
-                        segments
-                    )
-
-                # Проверяем флаг остановки после извлечения образцов
-                if processing_state['should_stop']:
-                    add_log("⏹️ Обработка остановлена пользователем")
-                    processing_state['is_processing'] = False
-                    processing_state['current_step'] = None
-                    processing_state['progress'] = 0
-                    return
-
-                # Преобразуем target_lang для voice cloning (RUSSIAN -> ru)
+                # Преобразуем target_lang (RUSSIAN -> ru)
                 lang_map = {
                     'RUSSIAN': 'ru',
                     'ENGLISH': 'en',
@@ -593,13 +544,30 @@ def process_youtube_sync(url, quality, options):
                 }
                 target_lang_for_voice = lang_map.get(options.get('target_lang', 'ru').upper(), options.get('target_lang', 'ru').lower())
 
+                add_log("🎤 Запуск озвучки через Voicer API...")
+
+                voicer_key = options.get('voicer_api_key', '')
+                if not voicer_key:
+                    add_log("❌ Voicer API ключ не указан!")
+                    processing_state['is_processing'] = False
+                    processing_state['current_step'] = None
+                    processing_state['progress'] = 0
+                    return
+
+                voice_presets = options.get('voice_presets', [])
+
+                from core.voicer_tts import VoicerTTS
+                voicer = VoicerTTS(
+                    api_key=voicer_key,
+                    presets=voice_presets,
+                    progress_callback=add_log,
+                    should_stop_callback=check_should_stop,
+                )
+
                 try:
-                    use_preset = options.get('use_preset_voices', False)
-                    segments_with_audio = cloner.generate_dubbing(
+                    segments_with_audio = voicer.generate_dubbing(
                         segments,
-                        speaker_samples,
-                        target_lang_for_voice,
-                        use_preset_voices=use_preset
+                        target_lang=target_lang_for_voice,
                     )
                 except InterruptedError:
                     add_log("⏹️ Обработка остановлена пользователем")
@@ -607,6 +575,10 @@ def process_youtube_sync(url, quality, options):
                     processing_state['current_step'] = None
                     processing_state['progress'] = 0
                     return
+
+                # Voicer API не нужно разделение аудио — пропускаем Demucs
+                instruments_path = None
+                vocals_path = video_path
 
                 # Проверяем флаг остановки после генерации дубляжа
                 if processing_state['should_stop']:

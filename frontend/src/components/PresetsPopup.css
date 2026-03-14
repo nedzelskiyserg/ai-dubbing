@@ -1,0 +1,737 @@
+/* ── Presets Popup — Portal Overlay ─────────────────── */
+
+.presets-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 64px;
+  z-index: 9999;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.presets-popup {
+  background: #0F0F0F;
+  border: 2px solid #2A2A2A;
+  width: 720px;
+  max-height: calc(100vh - 128px);
+  display: flex;
+  flex-direction: column;
+  animation: presets-slide-in 0.15s ease-out;
+}
+
+@keyframes presets-slide-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* ── Header ──────────────────────────────────────────── */
+
+.presets-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 44px;
+  padding: 0 6px 0 24px;
+  border-bottom: 2px solid #2A2A2A;
+  flex-shrink: 0;
+}
+
+.presets-title-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.presets-icon {
+  font-size: 16px;
+  color: #FFD600;
+}
+
+.presets-title {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  color: #F5F5F0;
+  letter-spacing: 1px;
+}
+
+.presets-badge {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  color: #6B6B6B;
+  background: #2A2A2A;
+  padding: 3px 10px;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.header-btn-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-subtle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: 1px solid #2A2A2A;
+  color: #6B6B6B;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 5px 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-subtle:hover {
+  color: #F5F5F0;
+  border-color: #4D4D4D;
+  background: #1A1A1A;
+}
+
+.btn-subtle .btn-icon {
+  font-size: 14px;
+}
+
+.presets-close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #1A1A1A;
+  border: none;
+  color: #6B6B6B;
+  cursor: pointer;
+  width: 32px;
+  height: 32px;
+  transition: color 0.15s;
+}
+
+.presets-close-btn:hover {
+  color: #F5F5F0;
+}
+
+.presets-close-btn .material-symbols-outlined {
+  font-size: 16px;
+}
+
+/* ── Language Tabs ────────────────────────────────────── */
+
+.presets-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 44px;
+  padding: 0 24px;
+  background: #0A0A0A;
+  border-bottom: 2px solid #2A2A2A;
+  border-left: 2px solid #2A2A2A;
+  border-right: 2px solid #2A2A2A;
+  margin: 0 -2px;
+  flex-shrink: 0;
+}
+
+.presets-tab {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: #6B6B6B;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.presets-tab:hover {
+  color: #999;
+}
+
+.presets-tab.active {
+  color: #FFD600;
+  border-bottom-color: #FFD600;
+}
+
+/* ── Presets List ─────────────────────────────────────── */
+
+.presets-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.presets-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.presets-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.presets-list::-webkit-scrollbar-thumb {
+  background: #2A2A2A;
+  border-radius: 2px;
+}
+
+.presets-empty {
+  text-align: center;
+  padding: 40px 0;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: #4D4D4D;
+}
+
+/* ── Preset Card ─────────────────────────────────────── */
+
+.preset-card {
+  background: #1A1A1A;
+  border: 1px solid #2A2A2A;
+  padding: 16px;
+  cursor: default;
+  transition: border-color 0.15s;
+}
+
+.preset-card:hover {
+  border-color: #333;
+}
+
+/* Draggable card states */
+.preset-card.draggable {
+  touch-action: none;
+}
+
+.preset-card.is-dragged {
+  opacity: 1;
+}
+
+/* During any drag operation, dim non-dragged cards slightly */
+.presets-list.is-dragging .preset-card:not(.is-dragged) {
+  opacity: 0.7;
+}
+
+.preset-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.preset-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.drag-handle {
+  font-size: 18px;
+  color: #3D3D3D;
+  cursor: grab;
+  flex-shrink: 0;
+  transition: color 0.15s;
+  padding: 2px;
+}
+
+.drag-handle:hover {
+  color: #808080;
+}
+
+.drag-handle:active,
+.is-dragging .drag-handle {
+  cursor: grabbing;
+  color: #FFD600;
+}
+
+.preset-position {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  color: #FFD600;
+  background: #2A2A2A;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.preset-name-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.preset-name {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  color: #F5F5F0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.preset-id {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  color: #6B6B6B;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.preset-actions {
+  display: flex;
+  gap: 0;
+  flex-shrink: 0;
+}
+
+.action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: #6B6B6B;
+  padding: 0;
+  cursor: pointer;
+  transition: all 0.15s;
+  width: 28px;
+  height: 28px;
+}
+
+.action-btn:hover {
+  color: #FFD600;
+}
+
+.action-btn.action-delete:hover {
+  color: #EF4444;
+}
+
+.action-btn .material-symbols-outlined {
+  font-size: 14px;
+}
+
+.preset-description {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  color: #6B6B6B;
+  margin-top: 12px;
+  line-height: 1.5;
+}
+
+.preset-tags {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.preset-tag {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: #10B981;
+  background: transparent;
+  border: 1px solid #2A2A2A;
+  padding: 6px 10px;
+}
+
+/* ── Per-language tag colors ─────────────────────────── */
+.preset-tag-RUSSIAN {
+  color: #4DC98B;
+  border-color: rgba(77, 201, 139, 0.3);
+}
+
+.preset-tag-ENGLISH {
+  color: #5B9FD6;
+  border-color: rgba(91, 159, 214, 0.3);
+}
+
+.preset-tag-SPANISH {
+  color: #D4A84B;
+  border-color: rgba(212, 168, 75, 0.3);
+}
+
+.preset-tag-FRENCH {
+  color: #A87FD4;
+  border-color: rgba(168, 127, 212, 0.3);
+}
+
+.preset-tag-GERMAN {
+  color: #D47F7F;
+  border-color: rgba(212, 127, 127, 0.3);
+}
+
+/* ── Add Preset Button ────────────────────────────────── */
+
+.preset-card ~ .add-preset-btn {
+  margin-top: 8px;
+}
+
+.add-preset-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-shrink: 0;
+  background: #0A0A0A;
+  border: 1px solid #FFD600;
+  color: #FFD600;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  padding: 0;
+  height: 48px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.add-preset-btn:hover {
+  background: rgba(255, 214, 0, 0.05);
+}
+
+.add-preset-btn .material-symbols-outlined {
+  font-size: 18px;
+}
+
+/* ── Footer ──────────────────────────────────────────── */
+
+.presets-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px;
+  background: #0A0A0A;
+  border-top: 2px solid #2A2A2A;
+  flex-shrink: 0;
+}
+
+.footer-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.footer-hint-icon {
+  font-size: 14px;
+  color: #4D4D4D;
+}
+
+.footer-hint-text {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  color: #4D4D4D;
+  white-space: nowrap;
+}
+
+.footer-buttons {
+  display: flex;
+  gap: 12px;
+}
+
+.btn-secondary {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: #6B6B6B;
+  background: #1A1A1A;
+  border: 2px solid #2A2A2A;
+  padding: 6px 16px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-secondary:hover {
+  color: #F5F5F0;
+  border-color: #4D4D4D;
+}
+
+.btn-primary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: #0A0A0A;
+  background: #FFD600;
+  border: none;
+  padding: 6px 16px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-primary:hover {
+  background: #FFE033;
+}
+
+.btn-primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-primary .btn-icon {
+  font-size: 14px;
+}
+
+/* ── Form View ───────────────────────────────────────── */
+
+.presets-form {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.form-row-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-label {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  color: #4D4D4D;
+  letter-spacing: 1px;
+}
+
+.form-input {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 13px;
+  background: #1A1A1A;
+  border: 2px solid #2A2A2A;
+  color: #F5F5F0;
+  padding: 10px 14px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.form-input:focus {
+  border-color: #FFD600;
+}
+
+.form-input::placeholder {
+  color: #3D3D3D;
+}
+
+.form-input-mono {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+}
+
+.form-textarea {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  background: #1A1A1A;
+  border: 2px solid #2A2A2A;
+  color: #F5F5F0;
+  padding: 14px;
+  outline: none;
+  resize: vertical;
+  min-height: 80px;
+  transition: border-color 0.15s;
+}
+
+.form-textarea:focus {
+  border-color: #FFD600;
+}
+
+.form-textarea::placeholder {
+  color: #3D3D3D;
+}
+
+.form-hint {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  color: #3D3D3D;
+}
+
+.lang-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.lang-chip {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #6B6B6B;
+  background: #0F0F0F;
+  border: 2px solid #2A2A2A;
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.lang-chip:hover {
+  color: #999;
+  border-color: #4D4D4D;
+}
+
+.lang-chip.active {
+  color: #FFD600;
+  background: rgba(255, 214, 0, 0.06);
+  border-color: #FFD600;
+}
+
+/* ── Manage Presets Button (in AdditionalOptions) ───── */
+
+.manage-presets-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: 1px solid #2A2A2A;
+  color: #808080;
+  font-family: 'Geist Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.manage-presets-btn:hover {
+  color: #FFD600;
+  border-color: #FFD600;
+  background: rgba(255, 214, 0, 0.03);
+}
+
+.manage-presets-btn .material-symbols-outlined {
+  font-size: 14px;
+}
+
+.presets-count {
+  font-size: 9px;
+  color: #4D4D4D;
+  background: #1A1A1A;
+  padding: 1px 5px;
+  border: 1px solid #2A2A2A;
+}
+
+/* ── Exit Confirmation Dialog ────────────────────────── */
+
+.confirm-overlay {
+  z-index: 10000;
+  background: rgba(0, 0, 0, 0.6);
+  align-items: center;
+  padding-top: 0;
+}
+
+.confirm-dialog {
+  background: #0F0F0F;
+  border: 2px solid #2A2A2A;
+  padding: 32px;
+  width: 420px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  animation: presets-slide-in 0.12s ease-out;
+}
+
+.confirm-icon-row {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 214, 0, 0.08);
+  border: 1px solid rgba(255, 214, 0, 0.2);
+  border-radius: 50%;
+}
+
+.confirm-icon {
+  font-size: 24px;
+  color: #FFD600;
+}
+
+.confirm-title {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  color: #F5F5F0;
+  letter-spacing: 1.5px;
+}
+
+.confirm-message {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: #6B6B6B;
+  text-align: center;
+  line-height: 1.6;
+  max-width: 320px;
+}
+
+.confirm-buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+  width: 100%;
+  justify-content: center;
+}
+
+.btn-discard {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: #EF4444;
+  background: none;
+  border: 2px solid rgba(239, 68, 68, 0.3);
+  padding: 6px 16px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-discard:hover {
+  background: rgba(239, 68, 68, 0.08);
+  border-color: #EF4444;
+}

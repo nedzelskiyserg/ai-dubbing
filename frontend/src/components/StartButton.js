@@ -4,7 +4,7 @@ import { processYouTube, processFile, getStatus, stopProcessing, healthCheck } f
 import { AppContext } from '../AppContext';
 
 const StartButton = () => {
-  const { youtubeUrl, quality, uploadedFile, options, openrouterKeyStatus } = useContext(AppContext);
+  const { youtubeUrl, quality, uploadedFile, options, openrouterKeyStatus, voicerKeyStatus, voicePresets } = useContext(AppContext);
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
   const statusIntervalRef = useRef(null);
@@ -65,6 +65,15 @@ const StartButton = () => {
       return;
     }
 
+    // Блокируем запуск если озвучка включена, но ключ невалидный
+    if (options.voiceEnabled && voicerKeyStatus !== 'valid') {
+      const msg = voicerKeyStatus === 'checking'
+        ? 'Подождите, идёт проверка Voicer API ключа...'
+        : 'Введите валидный Voicer API ключ для озвучки.';
+      alert(msg);
+      return;
+    }
+
     setIsProcessing(true);
     setProgress(0);
     try {
@@ -95,7 +104,8 @@ const StartButton = () => {
         provider: options.provider === 'QUALITY API' ? 'api' : (options.provider === 'OpenRouter' ? 'openrouter' : 'ollama'),
         openrouter_api_key: options.openrouterApiKey || '',
         voice_cloning: options.voiceEnabled,
-        use_preset_voices: options.usePresetVoices,
+        voicer_api_key: options.voicerApiKey || '',
+        voice_presets: voicePresets || [],
       };
 
       if (uploadedFile) {
