@@ -123,13 +123,14 @@ jobs:
           Write-Host "⚠️ .env не найден, пропускаем"
         }
 
-    # 8. Собираем Electron приложение (+ публикуем Release при теге v*)
+    # 8. Собираем Electron приложение и публикуем Release при теге v*
     - name: Build Electron app
       working-directory: ./frontend
       shell: pwsh
       run: |
-        $publish = if ("${{ github.ref }}".StartsWith("refs/tags/v")) { "always" } else { "never" }
-        Write-Host "🔨 Сборка Electron приложения (publish=$publish)..."
+        $publish = "never"
+        if ("${{ startsWith(github.ref, 'refs/tags/v') }}" -eq "true") { $publish = "always" }
+        Write-Host "Publish mode: $publish (ref: ${{ github.ref }})"
         npx electron-builder --win --publish $publish
       env:
         ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder-cache
