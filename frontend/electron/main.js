@@ -14,13 +14,30 @@ let appStarting = true; // Флаг: приложение ещё запуска�
 let apiPort = 5001;
 let apiPortFilePath = null;
 
-// --- Подробное диагностическое логирование (консоль + файл для .exe) ---
-// Windows: %LOCALAPPDATA%\AI Dubbing Studio\electron-api-debug.log (не Документы)
-// macOS/Linux: userData/electron-api-debug.log
+// --- Подробное диагностическое логирование (консоль + файл) ---
+// Логи складываются рядом с установленным приложением (resources/../logs/)
+// Fallback: %LOCALAPPDATA%\AI Dubbing Studio\
 let diagnosticLogPath = null;
 function getDiagnosticLogPath() {
   if (diagnosticLogPath) return diagnosticLogPath;
   try {
+    // Приоритет: папка logs/ рядом с exe (куда установлено приложение)
+    if (app.isPackaged) {
+      const exeDir = path.dirname(app.getPath('exe'));
+      const logsDir = path.join(exeDir, 'logs');
+      try {
+        if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
+        // Проверяем, что можем писать
+        const testFile = path.join(logsDir, '.write-test');
+        fs.writeFileSync(testFile, 'test');
+        fs.unlinkSync(testFile);
+        diagnosticLogPath = path.join(logsDir, 'electron-api-debug.log');
+        return diagnosticLogPath;
+      } catch (e) {
+        // Нет прав записи рядом с exe — fallback ниже
+      }
+    }
+    // Fallback: %LOCALAPPDATA%\AI Dubbing Studio\ или userData
     if (process.platform === 'win32') {
       const localDir = path.join(process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Local'), 'AI Dubbing Studio');
       if (!fs.existsSync(localDir)) fs.mkdirSync(localDir, { recursive: true });
