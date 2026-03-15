@@ -21,7 +21,7 @@ const PYTHON_URL = `https://www.python.org/ftp/python/${PYTHON_VERSION}/python-$
 const GET_PIP_URL = 'https://bootstrap.pypa.io/get-pip.py';
 const FFMPEG_URL = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip';
 const TORCH_INDEX_CPU = 'https://download.pytorch.org/whl/cpu';
-const TORCH_INDEX_CUDA = 'https://download.pytorch.org/whl/cu124';  // CUDA 12.4
+const TORCH_INDEX_CUDA = 'https://download.pytorch.org/whl/cu126';  // CUDA 12.6 (torch 2.7+)
 // VC++ Redistributable 2015-2022 (x64) — обязателен для PyTorch (c10.dll и др.)
 const VCREDIST_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe';
 
@@ -159,12 +159,12 @@ function detectNvidiaGpu() {
 }
 
 /**
- * Возвращает нужный вариант PyTorch ('cpu' или 'cu124') и URL индекса.
+ * Возвращает нужный вариант PyTorch ('cpu' или 'cu126') и URL индекса.
  */
 async function getTorchConfig() {
   const gpu = await detectNvidiaGpu();
   if (gpu.detected) {
-    return { variant: 'cu124', indexUrl: TORCH_INDEX_CUDA, gpuName: gpu.name };
+    return { variant: 'cu126', indexUrl: TORCH_INDEX_CUDA, gpuName: gpu.name };
   }
   return { variant: 'cpu', indexUrl: TORCH_INDEX_CPU, gpuName: null };
 }
@@ -352,7 +352,7 @@ async function installAll(onProgress) {
   // Случай (2) — апгрейд старой установки (CPU) при наличии GPU
   const needTorchReinstall = installedVariant
     ? installedVariant !== torchConfig.variant
-    : (status.packagesOk && torchConfig.variant === 'cu124');
+    : (status.packagesOk && torchConfig.variant === 'cu126');
 
   if (needTorchReinstall) {
     // GPU появился (или исчез) после первой установки — переустанавливаем PyTorch
@@ -746,12 +746,12 @@ async function ensureRequirements(onProgress) {
     const torchVariantFile = path.join(getBaseDir(), '.torch-variant');
     if (fs.existsSync(torchVariantFile)) {
       const variant = fs.readFileSync(torchVariantFile, 'utf8').trim();
-      if (variant === 'cu124') {
+      if (variant === 'cu124' || variant === 'cu126') {
         log(80, 'Восстановление PyTorch CUDA...');
         await runProcess(pythonExe, [
           '-m', 'pip', 'install',
           'torch', 'torchaudio',
-          '--index-url', 'https://download.pytorch.org/whl/cu124',
+          '--index-url', TORCH_INDEX_CUDA,
           '--force-reinstall',
           '--no-deps',
           '--no-cache-dir',

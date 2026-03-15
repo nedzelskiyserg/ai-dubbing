@@ -1,16 +1,16 @@
 flask
 flask-cors
 pytubefix
-# Используем версию из GitHub (zip), так как на PyPI устаревшая
-# zip-формат не требует установленного git на машине пользователя
-https://github.com/m-bain/whisperx/archive/refs/heads/main.zip
+# WhisperX v3.4.4 — последняя версия, совместимая с torch 2.6 (cu124).
+# v3.5.0+ требует torch>=2.7.1, v3.7.4+ требует torch~=2.8.0.
+# При переходе на cu126 можно обновить до latest.
+https://github.com/m-bain/whisperx/archive/refs/tags/v3.4.4.zip
 certifi
 huggingface_hub>=0.20.0
 pyannote.audio>=3.1.0
 # torch и torchaudio устанавливаются отдельно через dependency-manager (CPU или CUDA).
-# Фиксируем версию чтобы pip не тянул несовместимую из PyPI (2.8 ломает cu124).
-torch>=2.5.0,<2.7.0
-torchaudio>=2.5.0,<2.7.0
+# Не фиксируем версию — WhisperX сам тянет нужную.
+# dependency-manager переустановит с CUDA из cu126 индекса поверх.
 python-dotenv
 requests
 deep-translator
