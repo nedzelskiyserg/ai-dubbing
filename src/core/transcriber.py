@@ -458,7 +458,7 @@ class Transcriber:
 
             old_limit = getattr(sys, "getrecursionlimit", lambda: 1000)()
             try:
-                sys.setrecursionlimit(4000)
+                sys.setrecursionlimit(8000)
                 model = whisperx.load_model(
                     self.model_size,
                     device=device,
@@ -706,10 +706,16 @@ class Transcriber:
                         self._log(f"⚡ Длинное аудио (>{audio_duration/60:.0f}min): ограничение 1–6 спикеров")
 
                 # Загружаем пайплайн диаризации
-                diarize_model = diarize.DiarizationPipeline(
-                    use_auth_token=self.hf_token,
-                    device=self.device
-                )
+                # PyInstaller: speechbrain вызывает глубокую рекурсию через inspect.stack()
+                old_limit = sys.getrecursionlimit()
+                sys.setrecursionlimit(8000)
+                try:
+                    diarize_model = diarize.DiarizationPipeline(
+                        use_auth_token=self.hf_token,
+                        device=self.device
+                    )
+                finally:
+                    sys.setrecursionlimit(old_limit)
 
                 diarize_segments = diarize_model(
                     resolved_path,

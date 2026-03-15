@@ -50,7 +50,7 @@ def main():
         os.environ.setdefault("HUGGINGFACE_HUB_CACHE", models_dir)
         os.environ.setdefault("HF_HOME", models_dir)
 
-    sys.setrecursionlimit(4000)
+    sys.setrecursionlimit(8000)
 
     # --- Патч torch.load для PyTorch 2.6+ ---
     import torch
