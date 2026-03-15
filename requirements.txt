@@ -7,8 +7,10 @@ https://github.com/m-bain/whisperx/archive/refs/heads/main.zip
 certifi
 huggingface_hub>=0.20.0
 pyannote.audio>=3.1.0
-# torch и torchaudio устанавливаются отдельно (CPU-версия) через dependency-manager
-# Не добавляйте их сюда — иначе pip скачает CUDA-версию (~700 МБ вместо ~150 МБ)
+# torch и torchaudio устанавливаются отдельно через dependency-manager (CPU или CUDA).
+# Фиксируем версию чтобы pip не тянул несовместимую из PyPI (2.8 ломает cu124).
+torch>=2.5.0,<2.7.0
+torchaudio>=2.5.0,<2.7.0
 python-dotenv
 requests
 deep-translator
