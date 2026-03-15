@@ -710,10 +710,17 @@ class Transcriber:
                 old_limit = sys.getrecursionlimit()
                 sys.setrecursionlimit(8000)
                 try:
-                    diarize_model = diarize.DiarizationPipeline(
-                        use_auth_token=self.hf_token,
-                        device=self.device
-                    )
+                    try:
+                        diarize_model = diarize.DiarizationPipeline(
+                            token=self.hf_token,
+                            device=self.device
+                        )
+                    except TypeError:
+                        # Старые версии pyannote используют use_auth_token
+                        diarize_model = diarize.DiarizationPipeline(
+                            use_auth_token=self.hf_token,
+                            device=self.device
+                        )
                 finally:
                     sys.setrecursionlimit(old_limit)
 
