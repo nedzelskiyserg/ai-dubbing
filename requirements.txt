@@ -17,11 +17,6 @@ googletrans==4.0.0rc1
 # После установки numpy 2.x нужно переустановить scipy и sklearn:
 # pip install --force-reinstall scipy scikit-learn
 numpy>=2.1.0
-# F5-TTS — TTS engine (Diffusion Transformer + ConvNeXt V2, Flow Matching)
-# Requires Python 3.10+
-f5-tts>=1.1.17
-# RUAccent — русские ударения для естественного произношения в TTS
-ruaccent
 librosa==0.10.2
 onnxruntime>=1.19.0; sys_platform == 'darwin' or sys_platform == 'win32'
 onnxruntime-gpu>=1.19.0; sys_platform == 'linux'
