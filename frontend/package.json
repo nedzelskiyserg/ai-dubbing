@@ -62,7 +62,15 @@
       {
         "from": "../src",
         "to": "src",
-        "filter": ["**/*", "!__pycache__/**"]
+        "filter": [
+          "**/*",
+          "!__pycache__/**",
+          "!**/*.pyc",
+          "!temp/**",
+          "!voices/**",
+          "!main.py",
+          "!ui.py"
+        ]
       },
       {
         "from": "../requirements.txt",
