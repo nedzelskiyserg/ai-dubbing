@@ -864,14 +864,6 @@ function runModelsDownloadWindow(modelsStatus, requirementsNeedUpdate) {
       // Сообщаем UI есть ли шаг packages
       modelsWindow.webContents.send('setup-init-steps', !!requirementsNeedUpdate);
 
-      // Отправляем начальное состояние моделей
-      if (modelsStatus.whisperOk) {
-        modelsWindow.webContents.send('setup-progress', 'models-whisper', 100, 'Модель Whisper уже загружена');
-      }
-      if (modelsStatus.ttsOk) {
-        modelsWindow.webContents.send('setup-progress', 'models-tts', 100, 'Модели F5-TTS уже загружены');
-      }
-
       const sendProgress = (step, pct, msg) => {
         if (modelsWindow && !modelsWindow.isDestroyed()) {
           modelsWindow.webContents.send('setup-progress', step, pct, msg);
@@ -890,7 +882,16 @@ function runModelsDownloadWindow(modelsStatus, requirementsNeedUpdate) {
           }
         }
 
-        // 2. Загрузка моделей
+        // 2. Отправляем начальное состояние моделей ПОСЛЕ packages,
+        //    чтобы UI-шаги не перескакивали
+        if (modelsStatus.whisperOk) {
+          sendProgress('models-whisper', 100, 'Модель Whisper уже загружена');
+        }
+        if (modelsStatus.ttsOk) {
+          sendProgress('models-tts', 100, 'Модели F5-TTS уже загружены');
+        }
+
+        // 3. Загрузка моделей (скачает только недостающие)
         await depManager.downloadModels((step, pct, msg) => sendProgress(step, pct, msg));
       })().then(() => {
         logDiag('Загрузка завершена');
