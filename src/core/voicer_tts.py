@@ -99,18 +99,6 @@ class VoicerTTS:
 
     # ── API helpers ─────────────────────────────────────────────────────────
 
-    def validate_key(self) -> bool:
-        """Проверяет валидность API ключа через GET /balance."""
-        try:
-            resp = self._session.get(
-                f"{VOICER_BASE_URL}/balance",
-                headers=self._headers(),
-                timeout=10,
-            )
-            return resp.status_code == 200
-        except Exception:
-            return False
-
     def get_balance(self) -> Optional[dict]:
         """Возвращает баланс аккаунта."""
         try:

@@ -592,26 +592,3 @@ CRITICAL RULES:
 
         self._log(f"✅ Batch-перевод завершён: {total} сегментов")
         return translated_segments
-
-
-# Обратная совместимость
-def smart_translate_segments(
-    segments: List[Dict],
-    target_lang: str = "ru",
-    source_lang: Optional[str] = None,
-    ollama_url: str = "http://localhost:11434",
-    model: str = "qwen2.5:7b",
-    provider: str = "ollama",
-    api_key: Optional[str] = None,
-    progress_callback: Optional[Callable[[str], None]] = None,
-    should_stop_callback: Optional[Callable[[], bool]] = None
-) -> List[Dict]:
-    translator = SmartTranslator(
-        ollama_url=ollama_url,
-        model=model,
-        provider=provider,
-        api_key=api_key,
-        progress_callback=progress_callback,
-        should_stop_callback=should_stop_callback
-    )
-    return translator.translate_segments(segments, target_lang, source_lang)
