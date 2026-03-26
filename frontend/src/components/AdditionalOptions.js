@@ -9,6 +9,7 @@ const AdditionalOptions = () => {
     options, setOptions,
     openrouterKeyStatus, validateOpenRouterKey,
     voicerKeyStatus, validateVoicerKey,
+    openaiKeyStatus, validateOpenaiKey,
     voicePresets, setVoicePresets,
   } = useContext(AppContext);
   const [processingExpanded, setProcessingExpanded] = useState(true);
@@ -17,6 +18,7 @@ const AdditionalOptions = () => {
   const [showPresetsPopup, setShowPresetsPopup] = useState(false);
   const debounceRef = useRef(null);
   const voicerDebounceRef = useRef(null);
+  const openaiDebounceRef = useRef(null);
 
   const updateOption = (key, value) => {
     setOptions(prev => ({ ...prev, [key]: value }));
@@ -54,11 +56,28 @@ const AdditionalOptions = () => {
     }, 600);
   };
 
+  // Обработчик изменения OpenAI API ключа с debounce-валидацией
+  const handleOpenaiKeyChange = (value) => {
+    updateOption('openaiApiKey', value);
+
+    if (openaiDebounceRef.current) clearTimeout(openaiDebounceRef.current);
+
+    if (!value || !value.trim()) {
+      validateOpenaiKey('');
+      return;
+    }
+
+    openaiDebounceRef.current = setTimeout(() => {
+      validateOpenaiKey(value);
+    }, 600);
+  };
+
   // Очистка таймеров при размонтировании
   useEffect(() => {
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
       if (voicerDebounceRef.current) clearTimeout(voicerDebounceRef.current);
+      if (openaiDebounceRef.current) clearTimeout(openaiDebounceRef.current);
     };
   }, []);
 
@@ -97,6 +116,17 @@ const AdditionalOptions = () => {
             <div className="section-content-inner">
               <div className="options-row">
                 <div className="field-group">
+                  <div className="field-label">ENGINE</div>
+                  <Dropdown
+                    value={options.transcribeEngine}
+                    onChange={(value) => updateOption('transcribeEngine', value)}
+                    options={[
+                      { value: 'whisperx', label: 'WhisperX (local)' },
+                      { value: 'openai', label: 'OpenAI (cloud)' }
+                    ]}
+                  />
+                </div>
+                <div className="field-group">
                   <div className="field-label">LANGUAGE</div>
                   <Dropdown
                     value={options.language}
@@ -108,20 +138,22 @@ const AdditionalOptions = () => {
                     ]}
                   />
                 </div>
-                <div className="field-group">
-                  <div className="field-label">MODEL</div>
-                  <Dropdown
-                    value={options.model}
-                    onChange={(value) => updateOption('model', value)}
-                    options={[
-                      { value: 'Tiny', label: 'Tiny' },
-                      { value: 'Base', label: 'Base' },
-                      { value: 'Small', label: 'Small' },
-                      { value: 'Medium', label: 'Medium' },
-                      { value: 'LARGE', label: 'LARGE' }
-                    ]}
-                  />
-                </div>
+                {options.transcribeEngine === 'whisperx' && (
+                  <div className="field-group">
+                    <div className="field-label">MODEL</div>
+                    <Dropdown
+                      value={options.model}
+                      onChange={(value) => updateOption('model', value)}
+                      options={[
+                        { value: 'Tiny', label: 'Tiny' },
+                        { value: 'Base', label: 'Base' },
+                        { value: 'Small', label: 'Small' },
+                        { value: 'Medium', label: 'Medium' },
+                        { value: 'LARGE', label: 'LARGE' }
+                      ]}
+                    />
+                  </div>
+                )}
                 <div className="field-group">
                   <div className="field-label">SPEAKERS</div>
                   <Dropdown
@@ -138,13 +170,36 @@ const AdditionalOptions = () => {
                   />
                 </div>
               </div>
-              <div className="checkbox-row">
-                <div className="checkbox-container">
-                  <div className={`checkbox ${options.diarization ? 'checked' : ''}`} onClick={() => updateOption('diarization', !options.diarization)}>
-                    <span className="checkbox-checkmark">✓</span>
+              {options.transcribeEngine === 'openai' && (
+                <div className="options-row api-key-row">
+                  <div className="field-group full-width">
+                    <div className="field-label-row">
+                      <div className="field-label">OPENAI API KEY</div>
+                      {openaiKeyStatus !== 'idle' && (
+                        <span className={`key-status ${keyStatusClass[openaiKeyStatus]}`}>
+                          {keyStatusLabel[openaiKeyStatus]}
+                        </span>
+                      )}
+                    </div>
+                    <input
+                      type="password"
+                      className={`api-key-input ${openaiKeyStatus === 'valid' ? 'input-valid' : ''} ${openaiKeyStatus === 'invalid' ? 'input-invalid' : ''}`}
+                      value={options.openaiApiKey || ''}
+                      onChange={(e) => handleOpenaiKeyChange(e.target.value)}
+                      placeholder="sk-proj-..."
+                    />
                   </div>
-                  <span className="checkbox-label" onClick={() => updateOption('diarization', !options.diarization)}>Diarization</span>
                 </div>
+              )}
+              <div className="checkbox-row">
+                {options.transcribeEngine === 'whisperx' && (
+                  <div className="checkbox-container">
+                    <div className={`checkbox ${options.diarization ? 'checked' : ''}`} onClick={() => updateOption('diarization', !options.diarization)}>
+                      <span className="checkbox-checkmark">✓</span>
+                    </div>
+                    <span className="checkbox-label" onClick={() => updateOption('diarization', !options.diarization)}>Diarization</span>
+                  </div>
+                )}
                 <div className="checkbox-container">
                   <div className={`checkbox ${options.transcribe ? 'checked' : ''}`} onClick={() => updateOption('transcribe', !options.transcribe)}>
                     <span className="checkbox-checkmark">✓</span>

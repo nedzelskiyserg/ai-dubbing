@@ -5,7 +5,9 @@ export const AppContext = createContext();
 // localStorage ключи
 const STORAGE_KEY_OPENROUTER = 'ai-dubbing-openrouter-api-key';
 const STORAGE_KEY_VOICER = 'ai-dubbing-voicer-api-key';
+const STORAGE_KEY_OPENAI = 'ai-dubbing-openai-api-key';
 const STORAGE_KEY_PRESETS = 'ai-dubbing-voice-presets';
+const STORAGE_KEY_OPTIONS = 'ai-dubbing-options';
 
 export const AppProvider = ({ children }) => {
   const [youtubeUrl, setYoutubeUrl] = useState('');
@@ -16,6 +18,7 @@ export const AppProvider = ({ children }) => {
   // Загружаем сохранённые данные из localStorage
   const savedKey = localStorage.getItem(STORAGE_KEY_OPENROUTER) || '';
   const savedVoicerKey = localStorage.getItem(STORAGE_KEY_VOICER) || '';
+  const savedOpenaiKey = localStorage.getItem(STORAGE_KEY_OPENAI) || '';
 
   const loadPresets = () => {
     try {
@@ -33,19 +36,47 @@ export const AppProvider = ({ children }) => {
     localStorage.setItem(STORAGE_KEY_PRESETS, JSON.stringify(voicePresets));
   }, [voicePresets]);
 
-  const [options, setOptions] = useState({
-    language: 'AUTO',
-    model: 'LARGE',
-    speakers: 'AUTO',
-    diarization: true,
-    transcribe: true,
-    translate: false,
-    targetLang: 'RUSSIAN',
-    provider: 'OpenRouter',
-    openrouterApiKey: savedKey,
-    voiceEnabled: false,
-    voicerApiKey: savedVoicerKey,
-  });
+  // Загружаем сохранённые опции из localStorage
+  const loadOptions = () => {
+    const defaults = {
+      language: 'AUTO',
+      model: 'LARGE',
+      speakers: 'AUTO',
+      diarization: true,
+      transcribe: true,
+      transcribeEngine: 'whisperx',
+      openaiApiKey: savedOpenaiKey,
+      translate: false,
+      targetLang: 'RUSSIAN',
+      provider: 'OpenRouter',
+      openrouterApiKey: savedKey,
+      voiceEnabled: false,
+      voicerApiKey: savedVoicerKey,
+    };
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY_OPTIONS);
+      if (raw) {
+        const saved = JSON.parse(raw);
+        // Мержим сохранённые поверх дефолтов, а ключи берём свежие из localStorage
+        return {
+          ...defaults,
+          ...saved,
+          openrouterApiKey: savedKey,
+          voicerApiKey: savedVoicerKey,
+          openaiApiKey: savedOpenaiKey,
+        };
+      }
+    } catch { /* ignore */ }
+    return defaults;
+  };
+
+  const [options, setOptions] = useState(loadOptions);
+
+  // Сохраняем опции в localStorage при изменении (кроме API-ключей — они хранятся отдельно)
+  useEffect(() => {
+    const { openrouterApiKey, voicerApiKey, openaiApiKey, ...safeOptions } = options;
+    localStorage.setItem(STORAGE_KEY_OPTIONS, JSON.stringify(safeOptions));
+  }, [options]);
 
   // Статус валидации ключей: 'idle' | 'checking' | 'valid' | 'invalid'
   const [openrouterKeyStatus, setOpenrouterKeyStatus] = useState(
@@ -53,6 +84,9 @@ export const AppProvider = ({ children }) => {
   );
   const [voicerKeyStatus, setVoicerKeyStatus] = useState(
     savedVoicerKey ? 'checking' : 'idle'
+  );
+  const [openaiKeyStatus, setOpenaiKeyStatus] = useState(
+    savedOpenaiKey ? 'checking' : 'idle'
   );
 
   // Валидация ключа через OpenRouter API
@@ -82,6 +116,34 @@ export const AppProvider = ({ children }) => {
     } catch {
       setOpenrouterKeyStatus('invalid');
       localStorage.removeItem(STORAGE_KEY_OPENROUTER);
+    }
+  }, []);
+
+  // Валидация ключа OpenAI (GET /v1/models)
+  const validateOpenaiKey = useCallback(async (key) => {
+    if (!key || !key.trim()) {
+      setOpenaiKeyStatus('idle');
+      return;
+    }
+
+    setOpenaiKeyStatus('checking');
+
+    try {
+      const response = await fetch('https://api.openai.com/v1/models', {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${key.trim()}` },
+      });
+
+      if (response.ok) {
+        setOpenaiKeyStatus('valid');
+        localStorage.setItem(STORAGE_KEY_OPENAI, key.trim());
+      } else {
+        setOpenaiKeyStatus('invalid');
+        localStorage.removeItem(STORAGE_KEY_OPENAI);
+      }
+    } catch {
+      setOpenaiKeyStatus('invalid');
+      localStorage.removeItem(STORAGE_KEY_OPENAI);
     }
   }, []);
 
@@ -123,6 +185,9 @@ export const AppProvider = ({ children }) => {
     if (savedVoicerKey) {
       validateVoicerKey(savedVoicerKey);
     }
+    if (savedOpenaiKey) {
+      validateOpenaiKey(savedOpenaiKey);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -143,6 +208,8 @@ export const AppProvider = ({ children }) => {
         validateOpenRouterKey,
         voicerKeyStatus,
         validateVoicerKey,
+        openaiKeyStatus,
+        validateOpenaiKey,
         voicePresets,
         setVoicePresets,
       }}

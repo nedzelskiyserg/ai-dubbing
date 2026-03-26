@@ -58,47 +58,56 @@ const AppContent = () => {
   }, []);
 
   // Обработка закрытия окна - принудительно останавливаем все процессы
+  // В dev-режиме HMR/hot-reload вызывает beforeunload, что ложно останавливает обработку.
+  // Поэтому отправляем stop только при реальном закрытии окна (Electron window.close).
   useEffect(() => {
-    const handleBeforeUnload = async (event) => {
-      // Отправляем запрос на остановку процесса
+    // Флаг: true когда окно действительно закрывается (не HMR)
+    let isRealUnload = false;
+
+    // Electron main.js шлёт 'window-closing' перед закрытием
+    const handleElectronClose = () => { isRealUnload = true; };
+    window.addEventListener('electron-window-closing', handleElectronClose);
+
+    // В production (не-webpack) любой unload — реальный
+    if (!module.hot) {
+      isRealUnload = true;
+    }
+
+    const sendStop = () => {
       try {
-        // Используем sendBeacon для надежной отправки даже при закрытии
         const data = JSON.stringify({});
-        const stopUrl = `${API_BASE_URL}/stop`;
-        navigator.sendBeacon(stopUrl, data);
-        
-        try {
-          await fetch(stopUrl, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: data,
-            keepalive: true // Важно для отправки при закрытии
-          });
-        } catch (error) {
-          // Игнорируем ошибки при закрытии
-        }
+        navigator.sendBeacon(`${API_BASE_URL}/stop`, data);
+      } catch (error) {
+        // Игнорируем ошибки при закрытии
+      }
+    };
+
+    const handleBeforeUnload = async (event) => {
+      if (!isRealUnload) return;
+      sendStop();
+      try {
+        await fetch(`${API_BASE_URL}/stop`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+          keepalive: true
+        });
       } catch (error) {
         // Игнорируем ошибки при закрытии
       }
     };
 
     window.addEventListener('beforeunload', handleBeforeUnload);
-    
-    // Также обрабатываем событие unload
+
     const handleUnload = () => {
-      try {
-        const data = JSON.stringify({});
-        navigator.sendBeacon(`${API_BASE_URL}/stop`, data);
-      } catch (error) {
-        // Игнорируем ошибки
-      }
+      if (!isRealUnload) return;
+      sendStop();
     };
-    
+
     window.addEventListener('unload', handleUnload);
 
     return () => {
+      window.removeEventListener('electron-window-closing', handleElectronClose);
       window.removeEventListener('beforeunload', handleBeforeUnload);
       window.removeEventListener('unload', handleUnload);
     };

@@ -9,9 +9,11 @@ Voicer API TTS — озвучка через https://voiceapi.csv666.ru
 
 import os
 import time
+import threading
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import tempfile
 from pathlib import Path
 from typing import List, Dict, Optional, Callable
@@ -39,7 +41,12 @@ def _create_session() -> requests.Session:
 # Интервал опроса статуса задачи (секунды)
 POLL_INTERVAL = 1.0
 # Максимальное время ожидания одной задачи (секунды)
-MAX_WAIT_TIME = 120
+MAX_WAIT_TIME = 300
+# Максимум параллельных запросов к API
+MAX_PARALLEL = 5
+# Retry при 429 (лимит активных задач)
+RATE_LIMIT_RETRY_DELAY = 10  # секунд между retry
+RATE_LIMIT_MAX_RETRIES = 30  # макс retry (~5 минут)
 
 # Дефолтные настройки голоса (ElevenLabs multilingual v2)
 DEFAULT_VOICE_SETTINGS = {
@@ -78,10 +85,14 @@ class VoicerTTS:
         self._speaker_voice_map: Dict[str, str] = {}
         # HTTP session с retry-логикой
         self._session = _create_session()
+        # Lock для потокобезопасного логирования и счётчиков
+        self._log_lock = threading.Lock()
+        self._progress_lock = threading.Lock()
 
     def _log(self, msg: str):
         if self.progress_callback:
-            self.progress_callback(msg)
+            with self._log_lock:
+                self.progress_callback(msg)
 
     def _headers(self) -> dict:
         return {"X-API-Key": self.api_key}
@@ -193,7 +204,7 @@ class VoicerTTS:
         return None
 
     def _create_task(self, text: str, template_uuid: Optional[str] = None) -> Optional[str]:
-        """Создаёт задачу синтеза речи. Возвращает task_id."""
+        """Создаёт задачу синтеза речи. Возвращает task_id. Retry при 429."""
         payload = {"text": text}
         if template_uuid:
             payload["template_uuid"] = template_uuid
@@ -201,24 +212,38 @@ class VoicerTTS:
             self._log("   No voice template specified for this segment!")
             return None
 
-        resp = self._session.post(
-            f"{VOICER_BASE_URL}/tasks",
-            headers=self._headers(),
-            json=payload,
-            timeout=30,
-        )
+        for attempt in range(RATE_LIMIT_MAX_RETRIES + 1):
+            if self.should_stop_callback and self.should_stop_callback():
+                raise InterruptedError("Processing stopped by user")
 
-        if resp.status_code == 200:
-            data = resp.json()
-            return data.get("task_id")
-        else:
-            error_detail = ""
-            try:
-                error_detail = resp.json().get("detail", resp.text)
-            except Exception:
-                error_detail = resp.text
-            self._log(f"   Task creation failed ({resp.status_code}): {error_detail}")
-            return None
+            resp = self._session.post(
+                f"{VOICER_BASE_URL}/tasks",
+                headers=self._headers(),
+                json=payload,
+                timeout=30,
+            )
+
+            if resp.status_code == 200:
+                data = resp.json()
+                return data.get("task_id")
+            elif resp.status_code == 429:
+                # Лимит активных задач — ждём и пробуем снова
+                if attempt < RATE_LIMIT_MAX_RETRIES:
+                    time.sleep(RATE_LIMIT_RETRY_DELAY)
+                    continue
+                else:
+                    self._log(f"   Task creation failed: rate limit after {attempt + 1} retries")
+                    return None
+            else:
+                error_detail = ""
+                try:
+                    error_detail = resp.json().get("detail", resp.text)
+                except Exception:
+                    error_detail = resp.text
+                self._log(f"   Task creation failed ({resp.status_code}): {error_detail}")
+                return None
+
+        return None
 
     def _wait_for_task(self, task_id: str) -> bool:
         """Ждёт завершения задачи. Возвращает True если задача готова."""
@@ -381,49 +406,57 @@ class VoicerTTS:
             self._assign_voice_to_speaker(spk, target_lang)
 
         total_segments = len(segments)
-        self._log(f"Generating dubbing for {total_segments} segments (Voicer API)...")
+        self._log(f"Generating dubbing for {total_segments} segments (Voicer API, {MAX_PARALLEL}x parallel)...")
 
         # Elastic timing
         from core.elastic_timing import compute_effective_durations
         compute_effective_durations(segments)
 
-        updated_segments = []
-        success_count = 0
-        error_count = 0
-        start_time = time.time()
-
+        # Подготовка задач: собираем индексы сегментов с текстом
+        jobs = []  # (index, seg, output_path, template_uuid, effective_duration)
         for i, seg in enumerate(segments):
-            if self.should_stop_callback and self.should_stop_callback():
-                self._log("Dubbing generation stopped by user")
-                raise InterruptedError("Processing stopped by user")
-
             text = seg.get("text", "").strip()
+            if not text:
+                continue
             speaker = seg.get("speaker", "SPEAKER_UNKNOWN")
             original_duration = float(seg.get("end", 0)) - float(seg.get("start", 0))
             effective_duration = float(seg.get("effective_duration", original_duration))
-
-            if not text:
-                updated_segments.append(seg)
-                continue
-
-            output_path = str(self.temp_tts_dir / f"segment_{i:04d}.wav")
-
-            progress = ((i + 1) / total_segments) * 100
-            elapsed = time.time() - start_time
-            avg_time = elapsed / (i + 1) if i > 0 else 0
-            remaining = avg_time * (total_segments - (i + 1))
-
-            # Получаем template для этого спикера
             template_uuid = self._speaker_voice_map.get(speaker)
+            output_path = str(self.temp_tts_dir / f"segment_{i:04d}.wav")
+            jobs.append((i, seg, output_path, template_uuid, effective_duration, speaker))
 
-            self._log(
-                f"[{i+1}/{total_segments}] ({progress:.0f}%) {speaker} | "
-                f"{len(text)} chars | budget: {effective_duration:.1f}s | "
-                f"~{remaining/60:.1f} min left"
-            )
+        total_jobs = len(jobs)
+        self._log(f"   {total_jobs} segments to generate, {total_segments - total_jobs} empty/skipped")
 
+        # Результаты: index → обновлённый сегмент
+        results: Dict[int, Dict] = {}
+        success_count = 0
+        error_count = 0
+        completed_count = 0
+        start_time = time.time()
+
+        # Семафор контролирует кол-во АКТИВНЫХ задач на сервере (не потоков!)
+        # Освобождается только когда задача ЗАВЕРШЕНА на сервере (success/error)
+        api_slots = threading.Semaphore(MAX_PARALLEL)
+
+        def _process_segment(job):
+            """Воркер: захватить слот → создать задачу → ждать → скачать → освободить слот."""
+            idx, seg, output_path, template_uuid, effective_duration, speaker = job
+
+            if self.should_stop_callback and self.should_stop_callback():
+                raise InterruptedError("Processing stopped by user")
+
+            text = seg.get("text", "").strip()
+
+            # Ждём свободный слот на сервере
+            api_slots.acquire()
             try:
-                # Создаём задачу с конкретным template
+                self._log(
+                    f"   ▶ [{idx+1}/{total_segments}] {speaker} | "
+                    f"{len(text)} chars | budget: {effective_duration:.1f}s"
+                )
+
+                # Создаём задачу (с retry на 429)
                 task_id = self._create_task(text, template_uuid=template_uuid)
                 if not task_id:
                     raise RuntimeError("Failed to create TTS task")
@@ -441,25 +474,74 @@ class VoicerTTS:
                 seg_copy = seg.copy()
                 seg_copy["audio_file"] = output_path
                 seg_copy["actual_audio_duration"] = actual_duration
-                updated_segments.append(seg_copy)
-                success_count += 1
+                return idx, seg_copy, actual_duration, effective_duration
+            finally:
+                # Слот освобождается ТОЛЬКО после завершения задачи на сервере
+                api_slots.release()
 
-                self._log(
-                    f"   {actual_duration:.1f}s / {effective_duration:.1f}s "
-                    f"({actual_duration/effective_duration:.0%})"
-                )
+        # Параллельная обработка через ThreadPoolExecutor
+        # max_workers чуть больше MAX_PARALLEL чтобы следующие воркеры
+        # были готовы стартовать как только слот освободится
+        interrupted = False
+        with ThreadPoolExecutor(max_workers=MAX_PARALLEL + 2) as executor:
+            future_to_job = {
+                executor.submit(_process_segment, job): job
+                for job in jobs
+            }
 
+            try:
+                for future in as_completed(future_to_job):
+                    if self.should_stop_callback and self.should_stop_callback():
+                        interrupted = True
+                        for f in future_to_job:
+                            f.cancel()
+                        break
+
+                    job = future_to_job[future]
+                    idx = job[0]
+
+                    try:
+                        idx, seg_copy, actual_dur, eff_dur = future.result()
+                        results[idx] = seg_copy
+                        with self._progress_lock:
+                            success_count += 1
+                            completed_count += 1
+                        elapsed = time.time() - start_time
+                        avg_time = elapsed / completed_count
+                        remaining = avg_time * (total_jobs - completed_count)
+                        self._log(
+                            f"   ✓ [{idx+1}/{total_segments}] "
+                            f"{actual_dur:.1f}s / {eff_dur:.1f}s ({actual_dur/eff_dur:.0%}) | "
+                            f"{completed_count}/{total_jobs} done | ~{remaining/60:.1f} min left"
+                        )
+                    except InterruptedError:
+                        interrupted = True
+                        for f in future_to_job:
+                            f.cancel()
+                        break
+                    except Exception as e:
+                        with self._progress_lock:
+                            error_count += 1
+                            completed_count += 1
+                        self._log(f"   ✗ [{idx+1}/{total_segments}] Error: {e}")
             except InterruptedError:
-                raise
-            except Exception as e:
-                self._log(f"[{i+1}/{total_segments}] Error: {e}")
+                interrupted = True
+
+        if interrupted:
+            self._log("Dubbing generation stopped by user")
+            raise InterruptedError("Processing stopped by user")
+
+        # Собираем финальный список с сохранением порядка
+        updated_segments = []
+        for i, seg in enumerate(segments):
+            if i in results:
+                updated_segments.append(results[i])
+            else:
                 updated_segments.append(seg)
-                error_count += 1
-                continue
 
         total_time = time.time() - start_time
         self._log(
-            f"Dubbing complete: {success_count}/{total_segments} OK, "
+            f"Dubbing complete: {success_count}/{total_jobs} OK, "
             f"{error_count} errors | Total: {total_time/60:.1f} min"
         )
 

@@ -120,7 +120,7 @@ if [ -n "$VENV_DIR" ]; then
     echo -e "  ${GREEN}✓${NC} $VENV_DIR активирован"
 
     # Проверяем критические зависимости
-    if ! python -c "import flask, f5_tts, whisperx, noisereduce" 2>/dev/null; then
+    if ! python -c "import flask, whisperx, noisereduce" 2>/dev/null; then
         echo -e "  ${YELLOW}⏳ Установка зависимостей...${NC}"
         pip install -r requirements.txt -q
         pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu -q

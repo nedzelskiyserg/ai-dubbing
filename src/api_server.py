@@ -35,6 +35,15 @@ def _fix_ssl_globally():
 
 _fix_ssl_globally()
 
+# --- Загрузка .env (HF_TOKEN, OPENAI_API_KEY и др.) ---
+try:
+    from dotenv import load_dotenv
+    _env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env')
+    if os.path.exists(_env_path):
+        load_dotenv(_env_path)
+except ImportError:
+    pass
+
 # --- Автоустановка недостающих зависимостей из requirements.txt ---
 def _ensure_requirements():
     """Проверяет хеш requirements.txt и запускает pip install если изменился."""
@@ -267,17 +276,7 @@ def process_youtube_sync(url, quality, options):
             processing_state['current_step'] = 'transcribing'
             processing_state['progress'] = 20
             add_log("🎤 Запуск транскрипции...")
-            
-            # Преобразуем model (LARGE -> large-v3) для конструктора Transcriber
-            model_map = {
-                'Tiny': 'tiny',
-                'Base': 'base',
-                'Small': 'small',
-                'Medium': 'medium',
-                'LARGE': 'large-v3'
-            }
-            model_size = model_map.get(options.get('model', 'LARGE'), options.get('model', 'large-v3').lower())
-            
+
             # Проверяем флаг остановки перед началом транскрипции
             if processing_state['should_stop']:
                 add_log("⏹️ Обработка остановлена пользователем")
@@ -285,37 +284,76 @@ def process_youtube_sync(url, quality, options):
                 processing_state['current_step'] = None
                 processing_state['progress'] = 0
                 return
-            
+
             # Создаем callback для проверки остановки
             def check_should_stop():
                 return processing_state.get('should_stop', False)
-            
-            # Создаем Transcriber с правильным model_size и callback для проверки остановки
-            transcriber = Transcriber(
-                model_size=model_size, 
-                progress_callback=add_log,
-                should_stop_callback=check_should_stop
-            )
-            
+
             # Преобразуем language (AUTO -> None, RU -> ru)
             language = options.get('language')
             if language and language.upper() == 'AUTO':
                 language = None
             elif language:
                 language = language.lower()
-            
-            enable_diarization = options.get('diarization', True)
+
             num_speakers = options.get('speakers')
             if num_speakers and isinstance(num_speakers, str) and num_speakers.upper() == 'AUTO':
                 num_speakers = None
             elif num_speakers:
                 num_speakers = int(num_speakers) if isinstance(num_speakers, (str, int)) else num_speakers
-            
-            result = transcriber.transcribe_full(
-                video_path,
-                language=language,
-                num_speakers=num_speakers if enable_diarization else None
-            )
+
+            # Выбор движка транскрипции
+            transcribe_engine = options.get('transcribeEngine', 'whisperx')
+            add_log(f"⚙️ Движок транскрипции: {transcribe_engine}")
+
+            if transcribe_engine == 'openai':
+                # OpenAI gpt-4o-transcribe-diarize
+                from core.openai_transcriber import OpenAITranscriber
+
+                openai_key = options.get('openaiApiKey', '').strip()
+                if not openai_key:
+                    # Fallback на ключ из .env
+                    openai_key = os.environ.get('OPENAI_API_KEY', '').strip()
+
+                if not openai_key:
+                    add_log("❌ OpenAI API Key не указан. Укажите ключ в настройках или .env")
+                    processing_state['is_processing'] = False
+                    return
+
+                transcriber = OpenAITranscriber(
+                    api_key=openai_key,
+                    progress_callback=add_log,
+                    should_stop_callback=check_should_stop,
+                )
+                result = transcriber.transcribe_full(
+                    video_path,
+                    language=language,
+                    num_speakers=num_speakers,
+                )
+            else:
+                # WhisperX (локальный)
+                # Преобразуем model (LARGE -> large-v3) для конструктора Transcriber
+                model_map = {
+                    'Tiny': 'tiny',
+                    'Base': 'base',
+                    'Small': 'small',
+                    'Medium': 'medium',
+                    'LARGE': 'large-v3'
+                }
+                model_size = model_map.get(options.get('model', 'LARGE'), options.get('model', 'large-v3').lower())
+
+                transcriber = Transcriber(
+                    model_size=model_size,
+                    progress_callback=add_log,
+                    should_stop_callback=check_should_stop
+                )
+
+                enable_diarization = options.get('diarization', True)
+                result = transcriber.transcribe_full(
+                    video_path,
+                    language=language,
+                    num_speakers=num_speakers if enable_diarization else None
+                )
             
             # Проверяем флаг остановки после транскрипции
             if processing_state['should_stop']:
@@ -738,17 +776,7 @@ def process_file_sync(file_path, options):
             processing_state['current_step'] = 'transcribing'
             processing_state['progress'] = 20
             add_log("🎤 Запуск транскрипции...")
-            
-            # Преобразуем model (LARGE -> large-v3) для конструктора Transcriber
-            model_map = {
-                'Tiny': 'tiny',
-                'Base': 'base',
-                'Small': 'small',
-                'Medium': 'medium',
-                'LARGE': 'large-v3'
-            }
-            model_size = model_map.get(options.get('model', 'LARGE'), options.get('model', 'large-v3').lower())
-            
+
             # Проверяем флаг остановки перед началом транскрипции
             if processing_state['should_stop']:
                 add_log("⏹️ Обработка остановлена пользователем")
@@ -756,37 +784,72 @@ def process_file_sync(file_path, options):
                 processing_state['current_step'] = None
                 processing_state['progress'] = 0
                 return
-            
+
             # Создаем callback для проверки остановки
             def check_should_stop():
                 return processing_state.get('should_stop', False)
-            
-            # Создаем Transcriber с правильным model_size и callback для проверки остановки
-            transcriber = Transcriber(
-                model_size=model_size, 
-                progress_callback=add_log,
-                should_stop_callback=check_should_stop
-            )
-            
+
             # Преобразуем language (AUTO -> None, RU -> ru)
             language = options.get('language')
             if language and language.upper() == 'AUTO':
                 language = None
             elif language:
                 language = language.lower()
-            
-            enable_diarization = options.get('diarization', True)
+
             num_speakers = options.get('speakers')
             if num_speakers and isinstance(num_speakers, str) and num_speakers.upper() == 'AUTO':
                 num_speakers = None
             elif num_speakers:
                 num_speakers = int(num_speakers) if isinstance(num_speakers, (str, int)) else num_speakers
-            
-            result = transcriber.transcribe_full(
-                file_path,
-                language=language,
-                num_speakers=num_speakers if enable_diarization else None
-            )
+
+            # Выбор движка транскрипции
+            transcribe_engine = options.get('transcribeEngine', 'whisperx')
+            add_log(f"⚙️ Движок транскрипции: {transcribe_engine}")
+
+            if transcribe_engine == 'openai':
+                from core.openai_transcriber import OpenAITranscriber
+
+                openai_key = options.get('openaiApiKey', '').strip()
+                if not openai_key:
+                    openai_key = os.environ.get('OPENAI_API_KEY', '').strip()
+
+                if not openai_key:
+                    add_log("❌ OpenAI API Key не указан. Укажите ключ в настройках или .env")
+                    processing_state['is_processing'] = False
+                    return
+
+                transcriber = OpenAITranscriber(
+                    api_key=openai_key,
+                    progress_callback=add_log,
+                    should_stop_callback=check_should_stop,
+                )
+                result = transcriber.transcribe_full(
+                    file_path,
+                    language=language,
+                    num_speakers=num_speakers,
+                )
+            else:
+                model_map = {
+                    'Tiny': 'tiny',
+                    'Base': 'base',
+                    'Small': 'small',
+                    'Medium': 'medium',
+                    'LARGE': 'large-v3'
+                }
+                model_size = model_map.get(options.get('model', 'LARGE'), options.get('model', 'large-v3').lower())
+
+                transcriber = Transcriber(
+                    model_size=model_size,
+                    progress_callback=add_log,
+                    should_stop_callback=check_should_stop
+                )
+
+                enable_diarization = options.get('diarization', True)
+                result = transcriber.transcribe_full(
+                    file_path,
+                    language=language,
+                    num_speakers=num_speakers if enable_diarization else None
+                )
             
             # Проверяем, была ли транскрипция прервана
             if isinstance(result, dict) and result.get("stopped"):

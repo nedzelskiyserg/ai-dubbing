@@ -171,6 +171,13 @@ function createWindow() {
 
   // Обработка закрытия окна - принудительно останавливаем все процессы
   mainWindow.on('close', async (event) => {
+    // Уведомляем renderer, чтобы beforeunload знал: это реальное закрытие, а не HMR
+    try {
+      mainWindow.webContents.executeJavaScript(
+        "window.dispatchEvent(new Event('electron-window-closing'))"
+      );
+    } catch (e) { /* окно уже уничтожено */ }
+
     // НЕ предотвращаем закрытие - всегда разрешаем
     // Отправляем запрос на остановку процесса через API
     try {

@@ -99,6 +99,8 @@ const StartButton = () => {
         speakers: options.speakers,
         diarization: options.diarization,
         transcribe: options.transcribe,
+        transcribeEngine: options.transcribeEngine || 'whisperx',
+        openaiApiKey: options.openaiApiKey || '',
         translate: options.translate,
         target_lang: options.targetLang,
         provider: options.provider === 'QUALITY API' ? 'api' : (options.provider === 'OpenRouter' ? 'openrouter' : 'ollama'),
