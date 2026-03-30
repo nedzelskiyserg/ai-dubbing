@@ -12,7 +12,9 @@ Smart Translator — профессиональный перевод с учёт
 import json
 import os
 import re
+import random
 import requests
+import requests.exceptions
 import time
 import logging
 from typing import List, Dict, Optional, Callable, Tuple
@@ -40,6 +42,8 @@ SPEECH_RATE = {
     'nl': 12.5,    # Голландский
     'cs': 11.5,    # Чешский
     'hu': 11.5,    # Венгерский
+    'sv': 12.5,    # Шведский
+    'no': 12.5,    # Норвежский
 }
 
 MAX_TTS_SPEED = 1.10
@@ -52,6 +56,18 @@ BATCH_SIZE_OPENROUTER = 12  # Облачные модели быстрее — �
 # OpenRouter API
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_DEFAULT_MODEL = "google/gemini-3-flash-preview"
+
+# Retry configuration for transient API errors
+API_MAX_RETRIES = 4
+API_BASE_DELAY = 1.0    # seconds
+API_MAX_DELAY = 30.0    # seconds
+
+# Transient errors worth retrying
+_TRANSIENT_EXCEPTIONS = (
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+    requests.exceptions.ChunkedEncodingError,
+)
 
 
 class SmartTranslator:
@@ -142,18 +158,36 @@ class SmartTranslator:
                 "num_predict": num_predict,
             }
         }
-        response = requests.post(
-            f"{self.ollama_url}/api/chat",
-            json=payload,
-            timeout=120
-        )
-        response.raise_for_status()
-        data = response.json()
-        return data.get("message", {}).get("content", "").strip()
+        last_exception = None
+        for attempt in range(API_MAX_RETRIES + 1):
+            try:
+                response = requests.post(
+                    f"{self.ollama_url}/api/chat",
+                    json=payload,
+                    timeout=120
+                )
+                if response.status_code >= 500:
+                    if attempt < API_MAX_RETRIES:
+                        delay = self._backoff_delay(attempt)
+                        self._log(f"   ⏳ Ollama {response.status_code}, retry {attempt + 1}/{API_MAX_RETRIES} через {delay:.1f}s...")
+                        time.sleep(delay)
+                        continue
+                response.raise_for_status()
+                data = response.json()
+                return data.get("message", {}).get("content", "").strip()
+            except _TRANSIENT_EXCEPTIONS as e:
+                last_exception = e
+                if attempt < API_MAX_RETRIES:
+                    delay = self._backoff_delay(attempt)
+                    self._log(f"   ⏳ Ollama {type(e).__name__}, retry {attempt + 1}/{API_MAX_RETRIES} через {delay:.1f}s...")
+                    time.sleep(delay)
+                    continue
+                raise
+        raise last_exception  # pragma: no cover
 
     def _call_openrouter(self, messages: List[Dict], temperature: float = 0.3,
                          num_predict: int = 500) -> str:
-        """Вызов OpenRouter API (OpenAI-compatible)."""
+        """Вызов OpenRouter API (OpenAI-compatible) с retry и exponential backoff."""
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -166,18 +200,49 @@ class SmartTranslator:
             "temperature": temperature,
             "max_tokens": num_predict,
         }
-        response = requests.post(
-            OPENROUTER_API_URL,
-            headers=headers,
-            json=payload,
-            timeout=120
-        )
-        response.raise_for_status()
-        data = response.json()
-        choices = data.get("choices", [])
-        if choices:
-            return choices[0].get("message", {}).get("content", "").strip()
-        return ""
+
+        last_exception = None
+        for attempt in range(API_MAX_RETRIES + 1):
+            try:
+                response = requests.post(
+                    OPENROUTER_API_URL,
+                    headers=headers,
+                    json=payload,
+                    timeout=120
+                )
+                # Retry on 429 (rate limit) and 5xx (server errors)
+                if response.status_code == 429 or response.status_code >= 500:
+                    retry_after = response.headers.get("Retry-After")
+                    delay = float(retry_after) if retry_after else self._backoff_delay(attempt)
+                    if attempt < API_MAX_RETRIES:
+                        self._log(f"   ⏳ API {response.status_code}, retry {attempt + 1}/{API_MAX_RETRIES} через {delay:.1f}s...")
+                        time.sleep(delay)
+                        continue
+                    response.raise_for_status()
+
+                response.raise_for_status()
+                data = response.json()
+                choices = data.get("choices", [])
+                if choices:
+                    return choices[0].get("message", {}).get("content", "").strip()
+                return ""
+
+            except _TRANSIENT_EXCEPTIONS as e:
+                last_exception = e
+                if attempt < API_MAX_RETRIES:
+                    delay = self._backoff_delay(attempt)
+                    self._log(f"   ⏳ {type(e).__name__}, retry {attempt + 1}/{API_MAX_RETRIES} через {delay:.1f}s...")
+                    time.sleep(delay)
+                    continue
+                raise
+
+        raise last_exception  # pragma: no cover
+
+    @staticmethod
+    def _backoff_delay(attempt: int) -> float:
+        """Exponential backoff with jitter."""
+        delay = min(API_BASE_DELAY * (2 ** attempt), API_MAX_DELAY)
+        return delay + random.uniform(0, delay * 0.5)
 
     @staticmethod
     def _has_chinese_chars(text: str) -> bool:
@@ -199,7 +264,8 @@ class SmartTranslator:
             "en": "English", "ru": "Russian", "es": "Spanish", "fr": "French",
             "de": "German", "it": "Italian", "pt": "Portuguese", "ja": "Japanese",
             "ko": "Korean", "zh": "Chinese", "ar": "Arabic", "hi": "Hindi",
-            "pl": "Polish", "tr": "Turkish", "nl": "Dutch", "cs": "Czech", "hu": "Hungarian"
+            "pl": "Polish", "tr": "Turkish", "nl": "Dutch", "cs": "Czech", "hu": "Hungarian",
+            "sv": "Swedish", "no": "Norwegian"
         }
         source_name = lang_names.get(source_lang.lower()[:2], source_lang)
         target_name = lang_names.get(target_lang.lower()[:2], target_lang)
@@ -296,7 +362,8 @@ RULES:
             "en": "English", "ru": "Russian", "es": "Spanish", "fr": "French",
             "de": "German", "it": "Italian", "pt": "Portuguese", "ja": "Japanese",
             "ko": "Korean", "zh": "Chinese", "ar": "Arabic", "hi": "Hindi",
-            "pl": "Polish", "tr": "Turkish", "nl": "Dutch", "cs": "Czech", "hu": "Hungarian"
+            "pl": "Polish", "tr": "Turkish", "nl": "Dutch", "cs": "Czech", "hu": "Hungarian",
+            "sv": "Swedish", "no": "Norwegian"
         }
         source_name = lang_names.get(source_lang.lower()[:2], source_lang)
         target_name = lang_names.get(target_lang.lower()[:2], target_lang)
@@ -536,8 +603,15 @@ CRITICAL RULES:
                         # Есть batch-перевод, но слишком длинный — сокращаем
                         max_chars_normal = self.calculate_max_chars(effective_duration, target_lang_code, speed=1.0)
                         target_chars = int(max_chars_normal * 0.95)
-                        lang_names = {"en": "English", "ru": "Russian", "es": "Spanish",
-                                      "fr": "French", "de": "German", "it": "Italian"}
+                        lang_names = {
+                            "en": "English", "ru": "Russian", "es": "Spanish",
+                            "fr": "French", "de": "German", "it": "Italian",
+                            "pt": "Portuguese", "ja": "Japanese", "ko": "Korean",
+                            "zh": "Chinese", "ar": "Arabic", "hi": "Hindi",
+                            "pl": "Polish", "tr": "Turkish", "nl": "Dutch",
+                            "cs": "Czech", "hu": "Hungarian", "sv": "Swedish",
+                            "no": "Norwegian"
+                        }
                         target_name = lang_names.get(target_lang_code, target_lang)
 
                         refine_prompt = (

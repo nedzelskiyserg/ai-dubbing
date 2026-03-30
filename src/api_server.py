@@ -409,11 +409,13 @@ def process_youtube_sync(url, quality, options):
 
                 # Преобразуем target_lang (RUSSIAN -> ru)
                 lang_map = {
-                    'RUSSIAN': 'ru',
-                    'ENGLISH': 'en',
-                    'SPANISH': 'es',
-                    'FRENCH': 'fr',
-                    'GERMAN': 'de'
+                    'RUSSIAN': 'ru', 'ENGLISH': 'en', 'SPANISH': 'es',
+                    'FRENCH': 'fr', 'GERMAN': 'de', 'ITALIAN': 'it',
+                    'PORTUGUESE': 'pt', 'CHINESE': 'zh', 'JAPANESE': 'ja',
+                    'KOREAN': 'ko', 'ARABIC': 'ar', 'HINDI': 'hi',
+                    'POLISH': 'pl', 'TURKISH': 'tr', 'DUTCH': 'nl',
+                    'CZECH': 'cs', 'HUNGARIAN': 'hu', 'SWEDISH': 'sv',
+                    'NORWEGIAN': 'no'
                 }
                 target_lang_code = lang_map.get(target_lang.upper(), target_lang.lower())
 
@@ -578,7 +580,9 @@ def process_youtube_sync(url, quality, options):
                     'HUNGARIAN': 'hu',
                     'KOREAN': 'ko',
                     'JAPANESE': 'ja',
-                    'HINDI': 'hi'
+                    'HINDI': 'hi',
+                    'SWEDISH': 'sv',
+                    'NORWEGIAN': 'no'
                 }
                 target_lang_for_voice = lang_map.get(options.get('target_lang', 'ru').upper(), options.get('target_lang', 'ru').lower())
 
@@ -970,11 +974,13 @@ def process_file_sync(file_path, options):
 
                 # Преобразуем target_lang (RUSSIAN -> ru)
                 lang_map = {
-                    'RUSSIAN': 'ru',
-                    'ENGLISH': 'en',
-                    'SPANISH': 'es',
-                    'FRENCH': 'fr',
-                    'GERMAN': 'de'
+                    'RUSSIAN': 'ru', 'ENGLISH': 'en', 'SPANISH': 'es',
+                    'FRENCH': 'fr', 'GERMAN': 'de', 'ITALIAN': 'it',
+                    'PORTUGUESE': 'pt', 'CHINESE': 'zh', 'JAPANESE': 'ja',
+                    'KOREAN': 'ko', 'ARABIC': 'ar', 'HINDI': 'hi',
+                    'POLISH': 'pl', 'TURKISH': 'tr', 'DUTCH': 'nl',
+                    'CZECH': 'cs', 'HUNGARIAN': 'hu', 'SWEDISH': 'sv',
+                    'NORWEGIAN': 'no'
                 }
                 target_lang_code = lang_map.get(options.get('target_lang', 'ru').upper(), options.get('target_lang', 'ru').lower())
                 provider = options.get('provider', 'api')
@@ -1197,10 +1203,12 @@ def process_file_sync(file_path, options):
                     'HUNGARIAN': 'hu',
                     'KOREAN': 'ko',
                     'JAPANESE': 'ja',
-                    'HINDI': 'hi'
+                    'HINDI': 'hi',
+                    'SWEDISH': 'sv',
+                    'NORWEGIAN': 'no'
                 }
                 target_lang_for_voice = lang_map.get(options.get('target_lang', 'ru').upper(), options.get('target_lang', 'ru').lower())
-                
+
                 try:
                     use_preset = options.get('use_preset_voices', False)
                     segments_with_audio = cloner.generate_dubbing(

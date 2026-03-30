@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import tempfile
 from pathlib import Path
 from typing import List, Dict, Optional, Callable
+from core.text_normalizer import normalize_for_tts
 
 from core.config import APP_PATHS
 
@@ -447,6 +448,7 @@ class VoicerTTS:
                 raise InterruptedError("Processing stopped by user")
 
             text = seg.get("text", "").strip()
+            text = normalize_for_tts(text, target_lang)
 
             # Ждём свободный слот на сервере
             api_slots.acquire()

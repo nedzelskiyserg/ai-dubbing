@@ -150,16 +150,13 @@ class Translator:
         """
         # Определяем полные названия языков для промпта
         lang_names = {
-            "en": "English",
-            "ru": "Russian",
-            "es": "Spanish",
-            "fr": "French",
-            "de": "German",
-            "it": "Italian",
-            "pt": "Portuguese",
-            "ja": "Japanese",
-            "ko": "Korean",
-            "zh": "Chinese",
+            "en": "English", "ru": "Russian", "es": "Spanish",
+            "fr": "French", "de": "German", "it": "Italian",
+            "pt": "Portuguese", "ja": "Japanese", "ko": "Korean",
+            "zh": "Chinese", "ar": "Arabic", "hi": "Hindi",
+            "pl": "Polish", "tr": "Turkish", "nl": "Dutch",
+            "cs": "Czech", "hu": "Hungarian", "sv": "Swedish",
+            "no": "Norwegian",
         }
         
         source_lang_name = lang_names.get(source_lang.lower(), source_lang)
@@ -223,16 +220,13 @@ class Translator:
         Резервный метод перевода через /api/generate (старый API).
         """
         lang_names = {
-            "en": "English",
-            "ru": "Russian",
-            "es": "Spanish",
-            "fr": "French",
-            "de": "German",
-            "it": "Italian",
-            "pt": "Portuguese",
-            "ja": "Japanese",
-            "ko": "Korean",
-            "zh": "Chinese",
+            "en": "English", "ru": "Russian", "es": "Spanish",
+            "fr": "French", "de": "German", "it": "Italian",
+            "pt": "Portuguese", "ja": "Japanese", "ko": "Korean",
+            "zh": "Chinese", "ar": "Arabic", "hi": "Hindi",
+            "pl": "Polish", "tr": "Turkish", "nl": "Dutch",
+            "cs": "Czech", "hu": "Hungarian", "sv": "Swedish",
+            "no": "Norwegian",
         }
         
         source_lang_name = lang_names.get(source_lang.lower(), source_lang)

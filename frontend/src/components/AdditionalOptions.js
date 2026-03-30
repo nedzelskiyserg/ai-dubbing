@@ -240,7 +240,21 @@ const AdditionalOptions = () => {
                       { value: 'ENGLISH', label: 'ENGLISH' },
                       { value: 'SPANISH', label: 'SPANISH' },
                       { value: 'FRENCH', label: 'FRENCH' },
-                      { value: 'GERMAN', label: 'GERMAN' }
+                      { value: 'GERMAN', label: 'GERMAN' },
+                      { value: 'ITALIAN', label: 'ITALIAN' },
+                      { value: 'PORTUGUESE', label: 'PORTUGUESE' },
+                      { value: 'CHINESE', label: 'CHINESE' },
+                      { value: 'JAPANESE', label: 'JAPANESE' },
+                      { value: 'KOREAN', label: 'KOREAN' },
+                      { value: 'ARABIC', label: 'ARABIC' },
+                      { value: 'HINDI', label: 'HINDI' },
+                      { value: 'POLISH', label: 'POLISH' },
+                      { value: 'TURKISH', label: 'TURKISH' },
+                      { value: 'DUTCH', label: 'DUTCH' },
+                      { value: 'CZECH', label: 'CZECH' },
+                      { value: 'HUNGARIAN', label: 'HUNGARIAN' },
+                      { value: 'SWEDISH', label: 'SWEDISH' },
+                      { value: 'NORWEGIAN', label: 'NORWEGIAN' }
                     ]}
                   />
                 </div>

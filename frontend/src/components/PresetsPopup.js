@@ -2,7 +2,7 @@ import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { createPortal } from 'react-dom';
 import './PresetsPopup.css';
 
-const LANGUAGES = ['ALL', 'RUSSIAN', 'ENGLISH', 'SPANISH', 'FRENCH', 'GERMAN'];
+const LANGUAGES = ['ALL', 'RUSSIAN', 'ENGLISH', 'SPANISH', 'FRENCH', 'GERMAN', 'ITALIAN', 'PORTUGUESE', 'CHINESE', 'JAPANESE', 'KOREAN', 'ARABIC', 'HINDI', 'POLISH', 'TURKISH', 'DUTCH', 'CZECH', 'HUNGARIAN', 'SWEDISH', 'NORWEGIAN'];
 
 const emptyPreset = () => ({
   id: Date.now().toString(),

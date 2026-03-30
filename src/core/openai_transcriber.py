@@ -13,9 +13,12 @@ import json
 import subprocess
 import tempfile
 import math
+import time
+import random
 from typing import Optional, Callable, Dict, List
 
 import requests
+import requests.exceptions
 
 from core.config import APP_PATHS
 
@@ -27,6 +30,17 @@ class OpenAITranscriber:
     MODEL = "gpt-4o-transcribe-diarize"
     MAX_FILE_SIZE = 24 * 1024 * 1024  # 24 MB (с запасом от 25 MB лимита)
     MAX_DURATION = 1300  # секунд (с запасом от 1400s лимита модели)
+
+    # Retry для transient ошибок API
+    API_MAX_RETRIES = 4
+    API_BASE_DELAY = 2.0    # seconds
+    API_MAX_DELAY = 60.0    # seconds
+
+    _TRANSIENT_EXCEPTIONS = (
+        requests.exceptions.ConnectionError,
+        requests.exceptions.Timeout,
+        requests.exceptions.ChunkedEncodingError,
+    )
 
     def __init__(
         self,
@@ -147,8 +161,14 @@ class OpenAITranscriber:
     # ------------------------------------------------------------------
     # Вызов API
     # ------------------------------------------------------------------
+    @staticmethod
+    def _backoff_delay(attempt: int, base: float, maximum: float) -> float:
+        """Exponential backoff with jitter."""
+        delay = min(base * (2 ** attempt), maximum)
+        return delay + random.uniform(0, delay * 0.5)
+
     def _call_api(self, audio_path: str, language: Optional[str] = None) -> Dict:
-        """Один вызов OpenAI Audio API."""
+        """Один вызов OpenAI Audio API с retry при transient-ошибках."""
         self._log("📡 Отправка в OpenAI API...")
 
         headers = {"Authorization": f"Bearer {self.api_key}"}
@@ -162,34 +182,59 @@ class OpenAITranscriber:
         if language:
             data["language"] = language
 
-        with open(audio_path, "rb") as f:
-            files = {"file": (os.path.basename(audio_path), f, "audio/mpeg")}
-            resp = requests.post(
-                self.API_URL,
-                headers=headers,
-                data=data,
-                files=files,
-                timeout=600,
-            )
+        last_exception = None
+        for attempt in range(self.API_MAX_RETRIES + 1):
+            try:
+                with open(audio_path, "rb") as f:
+                    files = {"file": (os.path.basename(audio_path), f, "audio/mpeg")}
+                    resp = requests.post(
+                        self.API_URL,
+                        headers=headers,
+                        data=data,
+                        files=files,
+                        timeout=600,
+                    )
 
-        if resp.status_code != 200:
-            error_detail = resp.text[:500]
-            raise RuntimeError(
-                f"OpenAI API error {resp.status_code}: {error_detail}"
-            )
+                # Retry на 429 (rate limit) и 5xx (серверные ошибки)
+                if resp.status_code == 429 or resp.status_code >= 500:
+                    retry_after = resp.headers.get("Retry-After")
+                    delay = float(retry_after) if retry_after else self._backoff_delay(
+                        attempt, self.API_BASE_DELAY, self.API_MAX_DELAY
+                    )
+                    if attempt < self.API_MAX_RETRIES:
+                        self._log(f"   ⏳ API {resp.status_code}, retry {attempt + 1}/{self.API_MAX_RETRIES} через {delay:.1f}s...")
+                        time.sleep(delay)
+                        continue
+                    # Последняя попытка — пусть raise_for_status() кинет исключение
+                    resp.raise_for_status()
 
-        result = resp.json()
-        # Логируем структуру для отладки
-        keys = list(result.keys())
-        self._log(f"✅ API ответил. Ключи: {keys}")
-        if result.get("segments"):
-            self._log(f"   Сегментов: {len(result['segments'])}")
-            # Покажем первый сегмент для понимания формата
-            first = result["segments"][0]
-            self._log(f"   Пример: {json.dumps(first, ensure_ascii=False)[:300]}")
-        if result.get("text"):
-            self._log(f"   Текст: {result['text'][:200]}...")
-        return result
+                if resp.status_code != 200:
+                    error_detail = resp.text[:500]
+                    raise RuntimeError(
+                        f"OpenAI API error {resp.status_code}: {error_detail}"
+                    )
+
+                result = resp.json()
+                keys = list(result.keys())
+                self._log(f"✅ API ответил. Ключи: {keys}")
+                if result.get("segments"):
+                    self._log(f"   Сегментов: {len(result['segments'])}")
+                    first = result["segments"][0]
+                    self._log(f"   Пример: {json.dumps(first, ensure_ascii=False)[:300]}")
+                if result.get("text"):
+                    self._log(f"   Текст: {result['text'][:200]}...")
+                return result
+
+            except self._TRANSIENT_EXCEPTIONS as e:
+                last_exception = e
+                if attempt < self.API_MAX_RETRIES:
+                    delay = self._backoff_delay(attempt, self.API_BASE_DELAY, self.API_MAX_DELAY)
+                    self._log(f"   ⏳ {type(e).__name__}, retry {attempt + 1}/{self.API_MAX_RETRIES} через {delay:.1f}s...")
+                    time.sleep(delay)
+                    continue
+                raise
+
+        raise last_exception  # pragma: no cover
 
     # ------------------------------------------------------------------
     # Определение длительности аудио
@@ -231,6 +276,7 @@ class OpenAITranscriber:
         temp_dir = str(APP_PATHS.get("temp", tempfile.gettempdir()))
         all_segments = []
         detected_language = language
+        failed_chunks = []
 
         for i in range(num_chunks):
             if self.should_stop_callback and self.should_stop_callback():
@@ -262,11 +308,22 @@ class OpenAITranscriber:
                     seg["start"] = seg.get("start", 0) + start_time
                     seg["end"] = seg.get("end", 0) + start_time
                     all_segments.append(seg)
+            except Exception as e:
+                self._log(f"   ❌ Часть {i + 1}/{num_chunks} не удалась после всех попыток: {e}")
+                failed_chunks.append(i + 1)
             finally:
                 try:
                     os.unlink(chunk_path)
                 except OSError:
                     pass
+
+        if failed_chunks:
+            self._log(f"⚠️ Не удалось транскрибировать часть(и): {failed_chunks}. "
+                       f"Получено {len(all_segments)} сегментов из остальных частей.")
+            if not all_segments:
+                raise RuntimeError(
+                    f"Все {num_chunks} частей не удалось транскрибировать"
+                )
 
         return {
             "segments": all_segments,
