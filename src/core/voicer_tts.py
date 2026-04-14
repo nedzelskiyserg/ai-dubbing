@@ -49,6 +49,19 @@ MAX_PARALLEL = 5
 RATE_LIMIT_RETRY_DELAY = 10  # секунд между retry
 RATE_LIMIT_MAX_RETRIES = 30  # макс retry (~5 минут)
 
+# Минимальная длина текста в одном запросе к Voicer API (ограничение сервиса).
+# Тексты короче батчатся по спикерам или паддятся фиктивным текстом.
+MIN_TEXT_LENGTH = 500
+# Целевой верхний размер бакета при батчинге (чтобы не отправлять слишком длинные пачки).
+BATCH_TARGET_LENGTH = 1400
+# Разделитель между фрагментами в бакете — даёт стабильную паузу для silence-split.
+# Точки произносятся медленно + переносы строк = ~600–800 мс тишины в выходном аудио.
+BATCH_SEPARATOR = "\n\n. . . . .\n\n"
+# Параметры silence-split (pydub.silence.split_on_silence)
+SPLIT_MIN_SILENCE_MS = 350
+SPLIT_SILENCE_THRESH_DB = -40
+SPLIT_KEEP_SILENCE_MS = 80
+
 # Дефолтные настройки голоса (ElevenLabs multilingual v2)
 DEFAULT_VOICE_SETTINGS = {
     "model_id": "eleven_multilingual_v2",
@@ -347,6 +360,243 @@ class VoicerTTS:
             except Exception:
                 return 0.0
 
+    # ── Batching helpers (для обхода ограничения API на min 500 chars) ─────
+
+    @staticmethod
+    def _pad_text(text: str) -> str:
+        """
+        Добивает короткий текст нейтральным филлером до MIN_TEXT_LENGTH.
+        Филлер ставится ПОСЛЕ реального текста за явной паузой, чтобы:
+          (а) API приняло запрос (≥500 chars),
+          (б) реальная речь была в начале аудио,
+          (в) video_maker при smart_trim по effective_duration отрезал филлер.
+        """
+        if len(text) >= MIN_TEXT_LENGTH:
+            return text
+        tail = ". . . . . . . . . . "
+        padded = text.rstrip() + BATCH_SEPARATOR + tail
+        while len(padded) < MIN_TEXT_LENGTH + 10:
+            padded += tail
+        return padded
+
+    def _build_units(self, normalized_jobs: List[tuple]) -> List[Dict]:
+        """
+        Группирует нормализованные jobs в «юниты» для отправки в API.
+
+        Юнит — одна единица работы для одного API-запроса. Типы:
+          - "single": один job, текст уже ≥500 chars, отправляется как есть.
+          - "padded": один job <500 chars, отправляется с паддингом (fallback-режим,
+             когда не с кем батчить — например одинокий короткий сегмент спикера).
+          - "bucket": 2+ jobs одного спикера, склеенные через BATCH_SEPARATOR,
+             суммарно ≥MIN_TEXT_LENGTH. Результат режется по тишине.
+
+        Бакеты строятся per-speaker (не обязательно смежно по времени), чтобы
+        покрыть диалоги A-B-A-B, где смежный батчинг бесполезен.
+        """
+        long_jobs = []
+        short_by_speaker: Dict[str, List[tuple]] = {}
+        for job in normalized_jobs:
+            _, _, _, _, _, speaker, norm_text = job
+            if len(norm_text) >= MIN_TEXT_LENGTH:
+                long_jobs.append(job)
+            else:
+                short_by_speaker.setdefault(speaker, []).append(job)
+
+        units: List[Dict] = []
+
+        for job in long_jobs:
+            units.append({"type": "single", "jobs": [job], "template_uuid": job[3]})
+
+        for speaker, shorts in short_by_speaker.items():
+            # Сохраняем хронологический порядок внутри спикера — важно для интонации.
+            shorts.sort(key=lambda j: j[0])
+            template_uuid = shorts[0][3]
+            bucket: List[tuple] = []
+            bucket_len = 0
+            for j in shorts:
+                t_len = len(j[6]) + len(BATCH_SEPARATOR)
+                # Не раздуваем бакет бесконечно — закрываем по верхней границе.
+                if bucket and bucket_len + t_len > BATCH_TARGET_LENGTH and bucket_len >= MIN_TEXT_LENGTH:
+                    units.append({"type": "bucket", "jobs": bucket, "template_uuid": template_uuid})
+                    bucket = []
+                    bucket_len = 0
+                bucket.append(j)
+                bucket_len += t_len
+
+            if bucket:
+                if bucket_len >= MIN_TEXT_LENGTH and len(bucket) >= 2:
+                    units.append({"type": "bucket", "jobs": bucket, "template_uuid": template_uuid})
+                elif len(bucket) >= 2:
+                    # Бакет есть, но суммарно <500 — попробуем склеить с предыдущим бакетом того же спикера.
+                    prev_bucket = next(
+                        (u for u in reversed(units)
+                         if u["type"] == "bucket" and u["jobs"][0][5] == speaker),
+                        None,
+                    )
+                    if prev_bucket is not None:
+                        prev_bucket["jobs"].extend(bucket)
+                    else:
+                        # Некуда мержить — отправляем поштучно с паддингом.
+                        for j in bucket:
+                            units.append({"type": "padded", "jobs": [j], "template_uuid": j[3]})
+                else:
+                    # Одинокий короткий сегмент — только паддинг.
+                    units.append({"type": "padded", "jobs": bucket, "template_uuid": bucket[0][3]})
+
+        return units
+
+    def _split_audio_by_silence(
+        self,
+        source_wav: str,
+        output_paths: List[str],
+    ) -> bool:
+        """
+        Режет WAV-файл на len(output_paths) кусков по тишине.
+        Пытается несколько наборов параметров — аудио от TTS не всегда даёт
+        одинаковые паузы. Возвращает True, если получилось ровное количество кусков.
+        """
+        try:
+            from pydub import AudioSegment
+            from pydub.silence import split_on_silence
+        except ImportError:
+            self._log("   pydub not available — cannot split bucket audio")
+            return False
+
+        try:
+            audio = AudioSegment.from_file(source_wav)
+        except Exception as e:
+            self._log(f"   Failed to load bucket audio: {e}")
+            return False
+
+        expected = len(output_paths)
+        # Пробуем разные пороги, начиная с «жёсткого» к «мягкому».
+        # Жёсткий = более длинные паузы требуются, меньше ложных срабатываний.
+        param_sets = [
+            (SPLIT_MIN_SILENCE_MS, SPLIT_SILENCE_THRESH_DB),
+            (450, -38),
+            (300, -42),
+            (250, -36),
+            (200, -45),
+        ]
+
+        chunks = None
+        for min_silence, thresh in param_sets:
+            try:
+                attempt = split_on_silence(
+                    audio,
+                    min_silence_len=min_silence,
+                    silence_thresh=thresh,
+                    keep_silence=SPLIT_KEEP_SILENCE_MS,
+                )
+            except Exception:
+                continue
+            if len(attempt) == expected:
+                chunks = attempt
+                break
+
+        if chunks is None:
+            self._log(
+                f"   Silence split mismatch: expected {expected} pieces, "
+                f"got varying counts across thresholds"
+            )
+            return False
+
+        for chunk, out_path in zip(chunks, output_paths):
+            try:
+                chunk.set_frame_rate(24000).set_channels(1).set_sample_width(2).export(
+                    out_path, format="wav"
+                )
+            except Exception as e:
+                self._log(f"   Failed to export split chunk: {e}")
+                return False
+
+        return True
+
+    def _run_unit(self, unit: Dict, target_lang: str) -> List[tuple]:
+        """
+        Обрабатывает один юнит (single / padded / bucket):
+          - формирует текст,
+          - создаёт одну задачу в API,
+          - ждёт результат,
+          - скачивает в tmp,
+          - (для bucket) режет по тишине на куски → раскладывает по output_path.
+        Возвращает список результатов: [(idx, seg_copy, actual_dur, eff_dur), ...]
+        Бросает исключение при фатальной ошибке юнита.
+        """
+        jobs = unit["jobs"]
+        template_uuid = unit["template_uuid"]
+        unit_type = unit["type"]
+
+        if unit_type == "single":
+            job = jobs[0]
+            idx, seg, output_path, _, eff_dur, speaker, norm_text = job
+            api_text = norm_text
+        elif unit_type == "padded":
+            job = jobs[0]
+            idx, seg, output_path, _, eff_dur, speaker, norm_text = job
+            api_text = self._pad_text(norm_text)
+        elif unit_type == "bucket":
+            api_text = BATCH_SEPARATOR.join(j[6] for j in jobs)
+            if len(api_text) < MIN_TEXT_LENGTH:
+                api_text = self._pad_text(api_text)
+        else:
+            raise ValueError(f"Unknown unit type: {unit_type}")
+
+        if unit_type == "bucket":
+            speakers_in_bucket = {j[5] for j in jobs}
+            label = f"BUCKET[{len(jobs)} segs, {', '.join(sorted(speakers_in_bucket))}]"
+        else:
+            label = f"[{jobs[0][0]+1}] {jobs[0][5]}"
+        self._log(f"   ▶ {label} | {len(api_text)} chars")
+
+        task_id = self._create_task(api_text, template_uuid=template_uuid)
+        if not task_id:
+            raise RuntimeError(f"Failed to create TTS task for {label}")
+        if not self._wait_for_task(task_id):
+            raise RuntimeError(f"Task {task_id} did not complete ({label})")
+
+        # Для bucket скачиваем во временный файл, потом режем.
+        if unit_type == "bucket":
+            tmp_wav = str(self.temp_tts_dir / f"_bucket_{task_id}.wav")
+            if not self._download_result(task_id, tmp_wav):
+                raise RuntimeError(f"Failed to download bucket task {task_id}")
+
+            output_paths = [j[2] for j in jobs]
+            ok = self._split_audio_by_silence(tmp_wav, output_paths)
+            try:
+                os.remove(tmp_wav)
+            except Exception:
+                pass
+
+            if not ok:
+                # Fallback: перезапускаем каждый сегмент бакета как padded single.
+                self._log(f"   Bucket split failed — falling back to padded per-segment")
+                results = []
+                for j in jobs:
+                    fb_unit = {"type": "padded", "jobs": [j], "template_uuid": template_uuid}
+                    results.extend(self._run_unit(fb_unit, target_lang))
+                return results
+
+            results = []
+            for j in jobs:
+                idx, seg, out_path, _, eff_dur, speaker, _ = j
+                actual_dur = self._get_audio_duration(out_path)
+                seg_copy = seg.copy()
+                seg_copy["audio_file"] = out_path
+                seg_copy["actual_audio_duration"] = actual_dur
+                results.append((idx, seg_copy, actual_dur, eff_dur))
+            return results
+
+        # single / padded: скачиваем сразу в итоговый путь.
+        if not self._download_result(task_id, output_path):
+            raise RuntimeError(f"Failed to download task {task_id} ({label})")
+
+        actual_dur = self._get_audio_duration(output_path)
+        seg_copy = seg.copy()
+        seg_copy["audio_file"] = output_path
+        seg_copy["actual_audio_duration"] = actual_dur
+        return [(idx, seg_copy, actual_dur, eff_dur)]
+
     # ── Main generation ─────────────────────────────────────────────────────
 
     def generate_dubbing(
@@ -413,21 +663,40 @@ class VoicerTTS:
         from core.elastic_timing import compute_effective_durations
         compute_effective_durations(segments)
 
-        # Подготовка задач: собираем индексы сегментов с текстом
-        jobs = []  # (index, seg, output_path, template_uuid, effective_duration)
+        # Подготовка нормализованных jobs: собираем сегменты с текстом,
+        # нормализация происходит СЕЙЧАС (а не в воркере), чтобы корректно
+        # считать длину текста при батчинге.
+        normalized_jobs = []
+        # Формат: (index, seg, output_path, template_uuid, effective_duration, speaker, normalized_text)
         for i, seg in enumerate(segments):
             text = seg.get("text", "").strip()
             if not text:
+                continue
+            norm_text = normalize_for_tts(text, target_lang)
+            if not norm_text.strip():
                 continue
             speaker = seg.get("speaker", "SPEAKER_UNKNOWN")
             original_duration = float(seg.get("end", 0)) - float(seg.get("start", 0))
             effective_duration = float(seg.get("effective_duration", original_duration))
             template_uuid = self._speaker_voice_map.get(speaker)
             output_path = str(self.temp_tts_dir / f"segment_{i:04d}.wav")
-            jobs.append((i, seg, output_path, template_uuid, effective_duration, speaker))
+            normalized_jobs.append(
+                (i, seg, output_path, template_uuid, effective_duration, speaker, norm_text)
+            )
 
-        total_jobs = len(jobs)
+        total_jobs = len(normalized_jobs)
         self._log(f"   {total_jobs} segments to generate, {total_segments - total_jobs} empty/skipped")
+
+        # Группируем в юниты для батчинга (обход ограничения API на MIN_TEXT_LENGTH).
+        units = self._build_units(normalized_jobs)
+        n_single = sum(1 for u in units if u["type"] == "single")
+        n_padded = sum(1 for u in units if u["type"] == "padded")
+        n_bucket = sum(1 for u in units if u["type"] == "bucket")
+        bucket_coverage = sum(len(u["jobs"]) for u in units if u["type"] == "bucket")
+        self._log(
+            f"   Batching: {len(units)} API calls → {n_single} single, "
+            f"{n_padded} padded, {n_bucket} bucket (covers {bucket_coverage} segs)"
+        )
 
         # Результаты: index → обновлённый сегмент
         results: Dict[int, Dict] = {}
@@ -440,92 +709,57 @@ class VoicerTTS:
         # Освобождается только когда задача ЗАВЕРШЕНА на сервере (success/error)
         api_slots = threading.Semaphore(MAX_PARALLEL)
 
-        def _process_segment(job):
-            """Воркер: захватить слот → создать задачу → ждать → скачать → освободить слот."""
-            idx, seg, output_path, template_uuid, effective_duration, speaker = job
-
+        def _process_unit(unit):
+            """Воркер: захватить слот → обработать юнит (может вернуть >1 результата) → освободить слот."""
             if self.should_stop_callback and self.should_stop_callback():
                 raise InterruptedError("Processing stopped by user")
-
-            text = seg.get("text", "").strip()
-            text = normalize_for_tts(text, target_lang)
-
-            # Ждём свободный слот на сервере
             api_slots.acquire()
             try:
-                self._log(
-                    f"   ▶ [{idx+1}/{total_segments}] {speaker} | "
-                    f"{len(text)} chars | budget: {effective_duration:.1f}s"
-                )
-
-                # Создаём задачу (с retry на 429)
-                task_id = self._create_task(text, template_uuid=template_uuid)
-                if not task_id:
-                    raise RuntimeError("Failed to create TTS task")
-
-                # Ждём выполнения
-                if not self._wait_for_task(task_id):
-                    raise RuntimeError(f"Task {task_id} did not complete")
-
-                # Скачиваем результат
-                if not self._download_result(task_id, output_path):
-                    raise RuntimeError(f"Failed to download task {task_id} result")
-
-                actual_duration = self._get_audio_duration(output_path)
-
-                seg_copy = seg.copy()
-                seg_copy["audio_file"] = output_path
-                seg_copy["actual_audio_duration"] = actual_duration
-                return idx, seg_copy, actual_duration, effective_duration
+                return self._run_unit(unit, target_lang)
             finally:
-                # Слот освобождается ТОЛЬКО после завершения задачи на сервере
                 api_slots.release()
 
-        # Параллельная обработка через ThreadPoolExecutor
-        # max_workers чуть больше MAX_PARALLEL чтобы следующие воркеры
-        # были готовы стартовать как только слот освободится
         interrupted = False
         with ThreadPoolExecutor(max_workers=MAX_PARALLEL + 2) as executor:
-            future_to_job = {
-                executor.submit(_process_segment, job): job
-                for job in jobs
+            future_to_unit = {
+                executor.submit(_process_unit, u): u for u in units
             }
 
             try:
-                for future in as_completed(future_to_job):
+                for future in as_completed(future_to_unit):
                     if self.should_stop_callback and self.should_stop_callback():
                         interrupted = True
-                        for f in future_to_job:
+                        for f in future_to_unit:
                             f.cancel()
                         break
 
-                    job = future_to_job[future]
-                    idx = job[0]
+                    unit = future_to_unit[future]
+                    n_in_unit = len(unit["jobs"])
 
                     try:
-                        idx, seg_copy, actual_dur, eff_dur = future.result()
-                        results[idx] = seg_copy
-                        with self._progress_lock:
-                            success_count += 1
-                            completed_count += 1
-                        elapsed = time.time() - start_time
-                        avg_time = elapsed / completed_count
-                        remaining = avg_time * (total_jobs - completed_count)
-                        self._log(
-                            f"   ✓ [{idx+1}/{total_segments}] "
-                            f"{actual_dur:.1f}s / {eff_dur:.1f}s ({actual_dur/eff_dur:.0%}) | "
-                            f"{completed_count}/{total_jobs} done | ~{remaining/60:.1f} min left"
-                        )
+                        unit_results = future.result()
+                        for idx, seg_copy, actual_dur, eff_dur in unit_results:
+                            results[idx] = seg_copy
+                            with self._progress_lock:
+                                success_count += 1
+                                completed_count += 1
+                            ratio = (actual_dur / eff_dur) if eff_dur > 0 else 0.0
+                            self._log(
+                                f"   ✓ [{idx+1}/{total_segments}] "
+                                f"{actual_dur:.1f}s / {eff_dur:.1f}s ({ratio:.0%}) | "
+                                f"{completed_count}/{total_jobs} done"
+                            )
                     except InterruptedError:
                         interrupted = True
-                        for f in future_to_job:
+                        for f in future_to_unit:
                             f.cancel()
                         break
                     except Exception as e:
                         with self._progress_lock:
-                            error_count += 1
-                            completed_count += 1
-                        self._log(f"   ✗ [{idx+1}/{total_segments}] Error: {e}")
+                            error_count += n_in_unit
+                            completed_count += n_in_unit
+                        failed_indices = ", ".join(str(j[0] + 1) for j in unit["jobs"])
+                        self._log(f"   ✗ [{failed_indices}] Unit error: {e}")
             except InterruptedError:
                 interrupted = True
 
