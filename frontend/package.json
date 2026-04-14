@@ -1,6 +1,6 @@
 {
   "name": "ai-dubbing-studio",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "AI Dubbing Studio - Professional video dubbing application",
   "author": "AI Dubbing Studio",
   "private": true,
@@ -81,7 +81,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "build/icon.ico",
