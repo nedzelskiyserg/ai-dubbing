@@ -105,6 +105,7 @@ try:
     from core.video_maker import VideoMaker
     from core.audio_separator import AudioSeparator
     from core.config import APP_PATHS
+    from core.queue_manager import get_queue_manager
     # Кэш Hugging Face (Whisper, Pyannote, F5-TTS) — в папку приложения
     os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(APP_PATHS["models"]))
     os.environ.setdefault("HF_HOME", str(APP_PATHS["models"]))
@@ -192,34 +193,28 @@ def clear_logs():
 
 @app.route('/api/process/youtube', methods=['POST'])
 def process_youtube():
-    """Обработка YouTube видео"""
-    global current_thread
-    
-    data = request.json
+    """
+    Legacy-совместимый эндпоинт: добавляет ролик в очередь и сразу запускает её.
+    Старый фронтенд-флоу (одна кнопка «Start Processing») работает без изменений.
+    """
+    data = request.json or {}
     url = data.get('url')
     quality = data.get('quality', '1080p')
-    
+
     if not url:
         return jsonify({'error': 'URL is required'}), 400
-    
-    # Останавливаем предыдущий процесс, если он есть
-    with process_lock:
-        if current_thread and current_thread.is_alive():
-            processing_state['should_stop'] = True
-            processing_state['is_processing'] = False
-    
-    # Запускаем обработку в отдельном потоке с возможностью прерывания
-    thread = threading.Thread(
-        target=process_youtube_sync, 
-        args=(url, quality, data),
-        daemon=True
+
+    options = {k: v for k, v in data.items() if k not in ('url', 'quality')}
+    mgr = _queue()
+    item = mgr.add(
+        source_type='youtube',
+        source=url,
+        options=options,
+        quality=quality,
+        title=data.get('title'),
     )
-    thread.start()
-    
-    with process_lock:
-        current_thread = thread
-    
-    return jsonify({'status': 'started'})
+    mgr.start()
+    return jsonify({'status': 'started', 'item_id': item.id})
 
 def process_youtube_sync(url, quality, options):
     """Синхронная обработка YouTube видео (выполняется в отдельном потоке)"""
@@ -722,50 +717,37 @@ def process_youtube_sync(url, quality, options):
 
 @app.route('/api/process/file', methods=['POST'])
 def process_file():
-    """Обработка загруженного файла"""
+    """
+    Legacy-совместимый эндпоинт: сохраняет файл, добавляет в очередь и запускает.
+    """
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
-    
+
     file = request.files['file']
-    options = json.loads(request.form.get('options', '{}'))
-    
-    # Создаем папку проекта (как в downloader.py)
+    try:
+        options = json.loads(request.form.get('options', '{}'))
+    except Exception:
+        options = {}
+
     downloads_dir = APP_PATHS['downloads']
     os.makedirs(downloads_dir, exist_ok=True)
-    
-    # Получаем имя файла без расширения для папки проекта
     file_name_without_ext = os.path.splitext(file.filename)[0]
-    video_folder_name = f"{file_name_without_ext}_local"
-    video_folder = os.path.join(downloads_dir, video_folder_name)
+    video_folder = os.path.join(downloads_dir, f"{file_name_without_ext}_local")
     os.makedirs(video_folder, exist_ok=True)
-    
-    add_log(f"📁 Создана папка проекта: {video_folder_name}")
-    
-    # Сохраняем файл в папку проекта
     file_path = os.path.join(video_folder, file.filename)
     file.save(file_path)
-    
+
     add_log(f"📁 Файл загружен: {file.filename}")
-    
-    # Останавливаем предыдущий процесс, если он есть
-    global current_thread
-    with process_lock:
-        if current_thread and current_thread.is_alive():
-            processing_state['should_stop'] = True
-            processing_state['is_processing'] = False
-    
-    # Запускаем обработку в отдельном потоке с возможностью прерывания
-    thread = threading.Thread(
-        target=process_file_sync, 
-        args=(file_path, options),
-        daemon=True
+
+    mgr = _queue()
+    item = mgr.add(
+        source_type='file',
+        source=file_path,
+        options=options,
+        title=file.filename,
     )
-    thread.start()
-    
-    with process_lock:
-        current_thread = thread
-    
-    return jsonify({'status': 'started'})
+    mgr.start()
+    return jsonify({'status': 'started', 'item_id': item.id})
 
 def process_file_sync(file_path, options):
     """Синхронная обработка файла (выполняется в отдельном потоке)"""
@@ -1341,6 +1323,127 @@ def process_file_sync(file_path, options):
     finally:
         # Всегда сбрасываем флаг остановки
         processing_state['should_stop'] = False
+
+# ─── Queue manager accessor ────────────────────────────────────────────
+def _queue():
+    """Ленивый доступ к singleton-очереди. Первый вызов инициализирует."""
+    return get_queue_manager(
+        state_ref=processing_state,
+        processor_youtube=process_youtube_sync,
+        processor_file=process_file_sync,
+        log_callback=add_log,
+    )
+
+# ─── Queue API ─────────────────────────────────────────────────────────
+@app.route('/api/queue', methods=['GET'])
+def queue_get():
+    """Полный снимок очереди с live-прогрессом активного элемента."""
+    return jsonify(_queue().get_state())
+
+@app.route('/api/queue/add', methods=['POST'])
+def queue_add():
+    """
+    Добавить элемент в очередь.
+    Поддерживает два варианта:
+      1. JSON body { url, quality, ...options } — youtube
+      2. multipart form с 'file' + 'options' (JSON) — локальный файл
+    """
+    mgr = _queue()
+
+    if request.content_type and request.content_type.startswith('multipart/form-data'):
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file provided'}), 400
+        file = request.files['file']
+        try:
+            options = json.loads(request.form.get('options', '{}'))
+        except Exception:
+            options = {}
+
+        # Сохраняем файл в папку проекта (тот же layout, что у /api/process/file).
+        downloads_dir = APP_PATHS['downloads']
+        os.makedirs(downloads_dir, exist_ok=True)
+        file_name_without_ext = os.path.splitext(file.filename)[0]
+        video_folder = os.path.join(downloads_dir, f"{file_name_without_ext}_local")
+        os.makedirs(video_folder, exist_ok=True)
+        file_path = os.path.join(video_folder, file.filename)
+        file.save(file_path)
+
+        item = mgr.add(
+            source_type='file',
+            source=file_path,
+            options=options,
+            title=file.filename,
+        )
+    else:
+        data = request.get_json(silent=True) or {}
+        url = data.get('url')
+        if not url:
+            return jsonify({'error': 'URL is required'}), 400
+        quality = data.get('quality', '1080p')
+        # Всё остальное из тела считается options.
+        options = {k: v for k, v in data.items() if k not in ('url', 'quality')}
+        item = mgr.add(
+            source_type='youtube',
+            source=url,
+            options=options,
+            quality=quality,
+            title=data.get('title'),
+        )
+
+    # Автостарт только если явно попросили (по умолчанию добавление не стартует очередь).
+    autostart = False
+    try:
+        if request.is_json:
+            autostart = bool((request.get_json(silent=True) or {}).get('autostart', False))
+        else:
+            autostart = bool(json.loads(request.form.get('options', '{}')).get('autostart', False))
+    except Exception:
+        pass
+    if autostart:
+        mgr.start()
+
+    return jsonify({'status': 'added', 'item': item.to_dict(), 'queue': mgr.get_state()})
+
+
+@app.route('/api/queue/start', methods=['POST'])
+def queue_start():
+    _queue().start()
+    return jsonify({'status': 'started', 'queue': _queue().get_state()})
+
+@app.route('/api/queue/pause', methods=['POST'])
+def queue_pause():
+    _queue().pause()
+    return jsonify({'status': 'pausing', 'queue': _queue().get_state()})
+
+@app.route('/api/queue/cancel-current', methods=['POST'])
+def queue_cancel_current():
+    ok = _queue().cancel_current()
+    return jsonify({'status': 'cancelling' if ok else 'idle', 'queue': _queue().get_state()})
+
+@app.route('/api/queue/<item_id>', methods=['DELETE'])
+def queue_remove(item_id):
+    ok = _queue().remove(item_id)
+    if not ok:
+        return jsonify({'error': 'Item not found or is currently processing'}), 404
+    return jsonify({'status': 'removed', 'queue': _queue().get_state()})
+
+@app.route('/api/queue/reorder', methods=['POST'])
+def queue_reorder():
+    data = request.get_json(silent=True) or {}
+    item_id = data.get('id')
+    to_index = data.get('to')
+    if item_id is None or to_index is None:
+        return jsonify({'error': 'id and to are required'}), 400
+    ok = _queue().reorder(item_id, int(to_index))
+    if not ok:
+        return jsonify({'error': 'Reorder failed'}), 400
+    return jsonify({'status': 'ok', 'queue': _queue().get_state()})
+
+@app.route('/api/queue/clear-done', methods=['POST'])
+def queue_clear_done():
+    removed = _queue().clear_done()
+    return jsonify({'status': 'ok', 'removed': removed, 'queue': _queue().get_state()})
+
 
 @app.route('/api/status', methods=['GET'])
 def get_status():

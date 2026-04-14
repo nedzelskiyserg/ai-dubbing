@@ -179,4 +179,46 @@ export const stopProcessing = async () => {
   }
 };
 
+// ── Queue API ──────────────────────────────────────────────────────────
+
+export const queueGet = async () => {
+  const response = await api.get('/queue');
+  return response.data;
+};
+
+export const queueAddYoutube = async (url, quality, options, title = null) => {
+  const response = await api.post('/queue/add', {
+    url,
+    quality,
+    title,
+    autostart: false,
+    ...options,
+  });
+  if (response.status >= 400) {
+    throw new Error(response.data?.error || `HTTP ${response.status}`);
+  }
+  return response.data;
+};
+
+export const queueAddFile = async (file, options) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('options', JSON.stringify({ ...options, autostart: false }));
+  const response = await api.post('/queue/add', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 300000,
+  });
+  if (response.status >= 400) {
+    throw new Error(response.data?.error || `HTTP ${response.status}`);
+  }
+  return response.data;
+};
+
+export const queueStart = async () => (await api.post('/queue/start')).data;
+export const queuePause = async () => (await api.post('/queue/pause')).data;
+export const queueCancelCurrent = async () => (await api.post('/queue/cancel-current')).data;
+export const queueRemove = async (itemId) => (await api.delete(`/queue/${itemId}`)).data;
+export const queueReorder = async (itemId, toIndex) => (await api.post('/queue/reorder', { id: itemId, to: toIndex })).data;
+export const queueClearDone = async () => (await api.post('/queue/clear-done')).data;
+
 export default api;

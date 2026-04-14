@@ -4,11 +4,51 @@ import { AppContext } from '../AppContext';
 import Dropdown from './Dropdown';
 
 const VideoSource = () => {
-  const { youtubeUrl, setYoutubeUrl, quality, setQuality, uploadedFile, setUploadedFile } = useContext(AppContext);
+  const {
+    youtubeUrl, setYoutubeUrl, quality, setQuality, uploadedFile, setUploadedFile,
+    addToQueue, options, openrouterKeyStatus, voicerKeyStatus,
+  } = useContext(AppContext);
   const [isDragging, setIsDragging] = useState(false);
   const [fileInfo, setFileInfo] = useState(null);
   const [thumbnailUrl, setThumbnailUrl] = useState(null);
+  const [isAdding, setIsAdding] = useState(false);
   const fileInputRef = useRef(null);
+
+  const hasSource = !!uploadedFile || (youtubeUrl && youtubeUrl.trim() && youtubeUrl !== 'https://youtube.com/watch?v=...');
+
+  const handleAddToQueue = async () => {
+    if (!hasSource || isAdding) return;
+
+    // Валидация ключей — те же правила, что были в старой кнопке Start.
+    if (options.translate && options.provider === 'OpenRouter' && openrouterKeyStatus !== 'valid') {
+      alert(openrouterKeyStatus === 'checking'
+        ? 'Подождите, идёт проверка OpenRouter API ключа...'
+        : 'Введите валидный OpenRouter API ключ для перевода.');
+      return;
+    }
+    if (options.voiceEnabled && voicerKeyStatus !== 'valid') {
+      alert(voicerKeyStatus === 'checking'
+        ? 'Подождите, идёт проверка Voicer API ключа...'
+        : 'Введите валидный Voicer API ключ для озвучки.');
+      return;
+    }
+
+    setIsAdding(true);
+    try {
+      await addToQueue();
+    } catch (e) {
+      alert(`Не удалось добавить в очередь: ${e.message || e}`);
+    } finally {
+      setIsAdding(false);
+    }
+  };
+
+  const handleUrlKeyDown = (e) => {
+    if (e.key === 'Enter' && hasSource) {
+      e.preventDefault();
+      handleAddToQueue();
+    }
+  };
 
   // Получаем информацию о файле
   useEffect(() => {
@@ -174,10 +214,7 @@ const VideoSource = () => {
                 // Не вызываем preventDefault - позволяем браузеру обработать вставку
                 setUploadedFile(null);
               }}
-              onKeyDown={(e) => {
-                // Разрешаем все стандартные комбинации клавиш
-                // Не блокируем Cmd+V, Ctrl+V, Cmd+C, Ctrl+C и т.д.
-              }}
+              onKeyDown={handleUrlKeyDown}
               autoComplete="off"
               autoCorrect="off"
               autoCapitalize="off"
@@ -308,6 +345,17 @@ const VideoSource = () => {
             </div>
           </div>
         )}
+
+        <button
+          className={`add-to-queue-btn ${!hasSource || isAdding ? 'disabled' : ''}`}
+          onClick={handleAddToQueue}
+          disabled={!hasSource || isAdding}
+          type="button"
+        >
+          <span className="material-symbols-outlined add-icon">add</span>
+          <span className="add-text">{isAdding ? 'ADDING…' : 'ADD TO QUEUE'}</span>
+          {hasSource && !isAdding && <span className="add-hint">· ⏎</span>}
+        </button>
 
         <input
           ref={fileInputRef}

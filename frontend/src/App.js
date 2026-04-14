@@ -6,6 +6,7 @@ import Header from './components/Header';
 import Tabs from './components/Tabs';
 import VideoSource from './components/VideoSource';
 import AdditionalOptions from './components/AdditionalOptions';
+import QueuePanel from './components/QueuePanel';
 import StartButton from './components/StartButton';
 import Terminal from './components/Terminal';
 
@@ -126,6 +127,7 @@ const AppContent = () => {
             >
               <VideoSource />
               <AdditionalOptions />
+              <QueuePanel />
               <StartButton />
             </div>
             <div 

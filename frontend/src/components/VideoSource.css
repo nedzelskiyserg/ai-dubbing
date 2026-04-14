@@ -292,3 +292,52 @@
   height: 24px;
   flex-shrink: 0;
 }
+
+/* ── Add to Queue button (в блоке Video Source) ─────────────────── */
+.add-to-queue-btn {
+  width: 100%;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: #1A1A1A;
+  border: 2px solid #FFD600;
+  color: #FFD600;
+  font-family: 'Geist Mono', monospace;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  cursor: pointer;
+  transition: background-color 0.2s, color 0.2s;
+  padding: 0 16px;
+  margin-top: 8px;
+}
+
+.add-to-queue-btn:hover:not(.disabled):not(:disabled) {
+  background: #FFD600;
+  color: #1A1A1A;
+}
+
+.add-to-queue-btn.disabled,
+.add-to-queue-btn:disabled {
+  border-color: #2A2A2A;
+  color: #4D4D4D;
+  cursor: not-allowed;
+}
+
+.add-to-queue-btn .add-icon {
+  font-size: 20px;
+}
+
+.add-to-queue-btn .add-hint {
+  color: #6B6B6B;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  font-weight: normal;
+  letter-spacing: 1px;
+}
+
+.add-to-queue-btn:hover:not(.disabled):not(:disabled) .add-hint {
+  color: #1A1A1A;
+}

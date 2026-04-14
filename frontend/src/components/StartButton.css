@@ -28,6 +28,23 @@
   border: 2px solid #FFD600;
 }
 
+.start-button.disabled,
+.start-button:disabled {
+  background: #1A1A1A;
+  border: 2px solid #2A2A2A;
+  cursor: not-allowed;
+}
+
+.start-button.disabled .start-icon,
+.start-button:disabled .start-icon {
+  color: #4D4D4D;
+}
+
+.start-button.disabled .start-text,
+.start-button:disabled .start-text {
+  color: #4D4D4D;
+}
+
 .start-button-content {
   display: flex;
   align-items: center;
